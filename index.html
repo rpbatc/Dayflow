@@ -1413,7 +1413,7 @@ function renderTimeline() {
     if(block.travelBlock){
       const naturalTop=(block.start-startM)*PX_PER_MIN;
       const naturalH=Math.max((block.end-block.start)*PX_PER_MIN, 22);
-      const visualTop=Math.max(naturalTop, visualBottom+1);
+      const visualTop=Math.max(naturalTop, visualBottom+2);
       visualBottom=visualTop+naturalH;
       html+=`<div class="time-block travel-block" style="top:${visualTop}px;height:${naturalH}px;left:52px">
         <div class="time-block-name">🚗 ${escHtml(block.label||'Travel')}</div>
@@ -1430,12 +1430,13 @@ function renderTimeline() {
     const naturalTop=(block.start-startM)*PX_PER_MIN;
     const naturalH=(effectiveEnd-block.start)*PX_PER_MIN;
     const isFixed=!!task.fixedTime;
-    const isCompact=naturalH<40;
-    const MIN_H=isCompact?28:52;
-    const displayH=Math.max(naturalH,MIN_H);
+    const isCompact=naturalH<32;
+    const hasActions = !isCompact && (block.status==='scheduled'||block.status==='in-progress');
+    const MIN_H = isCompact ? 28 : hasActions ? 72 : 52;
+    const displayH=Math.max(naturalH, MIN_H);
 
-    // Place below previous block if natural position would overlap
-    const visualTop=Math.max(naturalTop, visualBottom+1);
+    // Place below previous block — always leave a 2px gap
+    const visualTop=Math.max(naturalTop, visualBottom+2);
     visualBottom=visualTop+displayH;
 
     const proj=state.projects.find(p=>p.name===task.project);
@@ -1444,7 +1445,7 @@ function renderTimeline() {
     const inProgressCls=block.status==='in-progress'?' in-progress-block':'';
     const borderL=proj?`border-left:3px solid ${proj.color};padding-left:9px;`:'';
     let actions='';
-    if(naturalH>56&&!isCompact){
+    if(!isCompact){
       if(block.status==='scheduled')
         actions=`<div class="time-block-actions"><button class="block-btn start" onclick="event.stopPropagation();blockAction('${dateStr}','${block.taskId}','start')">▶ Start</button><button class="block-btn complete" onclick="event.stopPropagation();blockAction('${dateStr}','${block.taskId}','done')">✓ Done</button></div>`;
       else if(block.status==='in-progress')

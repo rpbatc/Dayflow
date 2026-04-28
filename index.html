@@ -898,11 +898,28 @@ async function loadFromDrive() {
     const driveTime = d.lastModified || 0;
 
     if (driveTime >= localTime) {
-      // Drive is same age or newer — use it
-      state.tasks = d.tasks || [];
-      state.projects = d.projects || [];
-      state.daySettings = d.daySettings || {};
-      state.savedLocations = d.savedLocations || [];
+      // Drive is newer — but merge tasks intelligently rather than wholesale replace
+      // Keep any local tasks that are newer than the Drive snapshot
+      const driveTasks = d.tasks || [];
+      const localTasks = localData?.tasks || [];
+      // Build a merged set: for each task, keep the version with the higher updatedAt
+      const merged = {};
+      driveTasks.forEach(t => { merged[t.id] = t; });
+      localTasks.forEach(t => {
+        if (!merged[t.id]) {
+          // Task exists locally but not in Drive — keep it (was added offline)
+          merged[t.id] = t;
+        } else {
+          // Both have it — keep whichever was updated more recently
+          const driveUpdated = merged[t.id].updatedAt || 0;
+          const localUpdated = t.updatedAt || 0;
+          if (localUpdated > driveUpdated) merged[t.id] = t;
+        }
+      });
+      state.tasks = Object.values(merged);
+      state.projects = d.projects || localData?.projects || [];
+      state.daySettings = d.daySettings || localData?.daySettings || {};
+      state.savedLocations = d.savedLocations || localData?.savedLocations || [];
       state.schedule = {};
       if (d.notes) setTimeout(() => { const el = document.getElementById('notes-textarea'); if (el) el.value = d.notes; }, 0);
     } else {
@@ -1383,18 +1400,16 @@ function renderTimeline() {
     }
   });
 
-  // Task blocks — track a visual cursor to prevent overlap when min-height > natural height
-  let visualCursorByType = {};
+  // Task blocks — single shared visual cursor to prevent any overlap
+  let visualBottom = 0; // tracks the bottom pixel of the last rendered block
   const sortedBlocks = [...sched.blocks].sort((a,b)=>a.start-b.start);
   sortedBlocks.forEach(block=>{
-    // Travel blocks render differently but still update visual cursor
+    // Travel blocks
     if(block.travelBlock){
-      const taskType = block.taskType || 'work';
       const naturalTop=(block.start-startM)*PX_PER_MIN;
       const naturalH=Math.max((block.end-block.start)*PX_PER_MIN, 22);
-      const prevBottom=visualCursorByType[taskType]||0;
-      const visualTop=Math.max(naturalTop, prevBottom+2);
-      visualCursorByType[taskType]=visualTop+naturalH;
+      const visualTop=Math.max(naturalTop, visualBottom+1);
+      visualBottom=visualTop+naturalH;
       html+=`<div class="time-block travel-block" style="top:${visualTop}px;height:${naturalH}px;left:52px">
         <div class="time-block-name">🚗 ${escHtml(block.label||'Travel')}</div>
         <div class="time-block-time">${fmtTime(block.start)}–${fmtTime(block.end)} · ${fmtDur(block.end-block.start)}</div>
@@ -1407,14 +1422,13 @@ function renderTimeline() {
     const naturalTop=(block.start-startM)*PX_PER_MIN;
     const naturalH=(block.end-block.start)*PX_PER_MIN;
     const isFixed=!!task.fixedTime;
-    // For short tasks use compact single-line display; min height 28px
     const isCompact=naturalH<40;
     const MIN_H=isCompact?28:52;
     const displayH=Math.max(naturalH,MIN_H);
 
-    const prevBottom=visualCursorByType[taskType]||0;
-    const visualTop=Math.max(naturalTop, prevBottom+2);
-    visualCursorByType[taskType]=visualTop+displayH;
+    // Place below previous block if natural position would overlap
+    const visualTop=Math.max(naturalTop, visualBottom+1);
+    visualBottom=visualTop+displayH;
 
     const proj=state.projects.find(p=>p.name===task.project);
     const cls=block.status==='done'?'done-block':block.status==='in-progress'?'in-progress':'scheduled';
@@ -2137,7 +2151,8 @@ function confirmTask(){
     chunkable:t.chunkable||false,
     chunkMin:t.chunkMin||null,
     completed:false,
-    createdAt:new Date().toISOString()
+    createdAt:new Date().toISOString(),
+    updatedAt:Date.now()
   };
   if(!task.name){showToast('Task needs a name','amber');return;}
   state.tasks.unshift(task);
@@ -2440,10 +2455,23 @@ function openBlockEdit(dateStr,taskId,event){
   if(!task)return;
   editingBlock={dateStr,taskId};
 
+  // Find the block in the schedule
+  const sched=state.schedule[dateStr];
+  const block=sched?.blocks.find(b=>b.taskId===taskId);
+  const status=block?.status||'scheduled';
+
   document.getElementById('popover-task-name').textContent=task.name;
 
   const fields=document.getElementById('popover-fields');
   fields.innerHTML=`
+    <div class="popover-field">
+      <div class="popover-label">Status</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${status!=='in-progress'&&!task.completed?`<button class="quick-btn" style="color:var(--accent);border-color:var(--accent)" onclick="startFromPopover()">▶ Start now</button>`:''}
+        ${status==='in-progress'?`<span style="font-size:12px;color:var(--accent);font-weight:600">▶ In progress</span>`:''}
+        ${task.completed?`<span style="font-size:12px;color:var(--green);font-weight:600">✓ Completed</span>`:`<button class="quick-btn" style="color:var(--green);border-color:var(--green)" onclick="completeFromPopover()">✓ Mark done</button>`}
+      </div>
+    </div>
     <div class="popover-field">
       <div class="popover-label">Task name</div>
       <input class="popover-input" id="pe-name" value="${escHtml(task.name)}"/>
@@ -2492,6 +2520,30 @@ function openBlockEdit(dateStr,taskId,event){
   document.getElementById('block-popover-overlay').className='popover-overlay open';
 }
 
+function startFromPopover(){
+  const {dateStr,taskId}=editingBlock;
+  if(!dateStr||!taskId)return;
+  const nowM=new Date().getHours()*60+new Date().getMinutes();
+  const sched=state.schedule[dateStr];
+  const block=sched?.blocks.find(b=>b.taskId===taskId);
+  const task=state.tasks.find(t=>t.id===taskId);
+  if(!block||!task)return;
+  const dur=block.end-block.start;
+
+  // Lock the task to this exact time — make it fixed
+  task.fixedTime=true;
+  task.fixedStart=minsToTime(nowM);
+  task.fixedEnd=minsToTime(nowM+dur);
+  task.lockedStart=nowM; // remember locked start for rendering
+
+  block.start=nowM;block.end=nowM+dur;block.status='in-progress';
+  closeBlockPopover();
+  state.schedule={};
+  buildScheduleForDate(dateStr);
+  saveNow();renderAll();
+  showToast('Task started and locked ✓');
+}
+
 let _peType=null,_pePriority=null;
 function peType(val,btn){
   _peType=val;
@@ -2507,6 +2559,7 @@ function pePriority(val,btn){
 function saveBlockEdit(){
   const task=state.tasks.find(t=>t.id===editingBlock.taskId);
   if(!task)return;
+  task.updatedAt=Date.now();
   task.name=document.getElementById('pe-name').value.trim()||task.name;
   task.duration=parseInt(document.getElementById('pe-duration').value)||task.duration;
   task.dueDate=document.getElementById('pe-due').value||null;
@@ -2534,7 +2587,7 @@ function saveBlockEdit(){
 
 function completeFromPopover(){
   const task = state.tasks.find(t=>t.id===editingBlock.taskId);
-  if(task){ task.completed=true; task.completedAt=new Date().toISOString(); }
+  if(task){ task.completed=true; task.completedAt=new Date().toISOString(); task.updatedAt=Date.now(); }
   // Also mark the block done if it exists on the timeline
   const sched = state.schedule[editingBlock.dateStr];
   if(sched){ const block=sched.blocks.find(b=>b.taskId===editingBlock.taskId); if(block)block.status='done'; }

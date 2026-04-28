@@ -1254,7 +1254,7 @@ function buildScheduleForDate(dateStr) {
     if (clash) {
       fixedConflicts.push({a: clash.taskId, b: t.id});
     } else {
-      fixedBlocks.push({taskId:t.id, start:fs, end:fe, status:'scheduled', taskType:t.taskType||'work', fixed:true});
+      fixedBlocks.push({taskId:t.id, start:fs, end:fe, status:t.blockStatus||'scheduled', taskType:t.taskType||'work', fixed:true});
       t.scheduledDate = dateStr;
       // Advance cursors past this fixed block so auto-tasks don't overlap
       slots.forEach(slot => {
@@ -2473,7 +2473,7 @@ function openBlockEdit(dateStr,taskId,event){
   // Find the block in the schedule
   const sched=state.schedule[dateStr];
   const block=sched?.blocks.find(b=>b.taskId===taskId);
-  const status=block?.status||'scheduled';
+  const status=block?.status||task.blockStatus||'scheduled';
 
   document.getElementById('popover-task-name').textContent=task.name;
 
@@ -2561,6 +2561,7 @@ function startFromPopover(){
   block.start=nowM;
   block.end=nowM+dur;
   block.status='in-progress';
+  task.blockStatus='in-progress'; // persist so rebuilds restore this
 
   closeBlockPopover();
   // Rebuild so everything else reshuffles around the locked block
@@ -2614,7 +2615,7 @@ function saveBlockEdit(){
 function completeFromPopover(){
   const nowM=new Date().getHours()*60+new Date().getMinutes();
   const task=state.tasks.find(t=>t.id===editingBlock.taskId);
-  if(task){ task.completed=true; task.completedAt=new Date().toISOString(); task.updatedAt=Date.now(); }
+  if(task){ task.completed=true; task.completedAt=new Date().toISOString(); task.updatedAt=Date.now(); task.blockStatus=null; }
   const sched=state.schedule[editingBlock.dateStr];
   if(sched){
     const block=sched.blocks.find(b=>b.taskId===editingBlock.taskId);
@@ -2690,6 +2691,7 @@ function takeBreak(taskId, remainingMins){
 
   // Mark original as partially done (not fully complete)
   task.partialDone=true;
+  task.blockStatus=null;
   task.updatedAt=Date.now();
 
   // Rebuild schedule — the remainder task will be auto-scheduled into next available slot

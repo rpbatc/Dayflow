@@ -182,7 +182,9 @@ input:checked + .toggle-slider:before { transform: translateX(14px); background:
 .slot-band.personal { background: rgba(45,212,191,0.04); }
 
 /* time blocks */
-.time-block { position: absolute; left: 52px; right: 0; border-radius: var(--radius-sm); padding: 7px 10px 8px; cursor: pointer; transition: filter 0.15s; overflow: visible; display: flex; flex-direction: column; border: 1px solid transparent; }
+.time-block { position: absolute; left: 52px; right: 4px; border-radius: 4px; padding: 3px 7px; cursor: pointer; transition: filter 0.15s, box-shadow 0.15s; overflow: hidden; border: 1px solid transparent; box-sizing: border-box; }
+.time-block:hover { filter: brightness(1.15); }
+.time-block.selected-block { box-shadow: 0 0 0 2px var(--accent); z-index: 2; position: absolute; }
 .time-block:hover { filter: brightness(1.12); }
 .time-block.work.scheduled { background: var(--accent-soft); border-color: rgba(123,110,246,0.3); }
 .time-block.personal.scheduled { background: var(--teal-soft); border-color: rgba(45,212,191,0.3); }
@@ -589,14 +591,33 @@ input:checked + .toggle-slider:before { transform: translateX(14px); background:
           </div>
         </div>
         <div class="floating-panel">
-          <div class="floating-header">
-            <div class="floating-title">Anytime today</div>
-            <div class="floating-sub">No fixed duration</div>
+          <!-- Task detail panel — shown when a block is selected -->
+          <div id="task-detail-panel" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+            <div style="padding:14px 14px 10px;border-bottom:1px solid var(--border);flex-shrink:0">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text3);font-weight:600" id="detail-type-label">Work</div>
+                <button onclick="closeDetailPanel()" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:13px;padding:0">✕</button>
+              </div>
+              <div style="font-size:14px;font-weight:600;color:var(--text);line-height:1.4;margin-bottom:6px" id="detail-name"></div>
+              <div style="font-size:12px;color:var(--text3);font-family:'DM Mono',monospace" id="detail-time"></div>
+            </div>
+            <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column;gap:6px" id="detail-status-row"></div>
+            <div style="padding:10px 14px;display:flex;flex-direction:column;gap:5px;overflow-y:auto;flex:1" id="detail-meta"></div>
+            <div style="padding:10px 14px;border-top:1px solid var(--border);flex-shrink:0">
+              <button class="btn btn-ghost btn-sm" style="width:100%;justify-content:center" onclick="openEditFromDetail()">✎ Edit task</button>
+            </div>
           </div>
-          <div class="floating-list" id="floating-list"></div>
-          <div class="overflow-section" id="overflow-section" style="display:none">
-            <div class="overflow-title">Scheduled ahead</div>
-            <div id="overflow-list"></div>
+          <!-- Default: anytime + overflow -->
+          <div id="default-panel" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+            <div class="floating-header">
+              <div class="floating-title">Anytime today</div>
+              <div class="floating-sub">No fixed duration</div>
+            </div>
+            <div class="floating-list" id="floating-list"></div>
+            <div class="overflow-section" id="overflow-section" style="display:none">
+              <div class="overflow-title">Scheduled ahead</div>
+              <div id="overflow-list"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -1025,13 +1046,13 @@ function init() {
   overlay.addEventListener('touchend', (e)=>{ if(!touchMoved && e.target===overlay) closeBlockPopover(); });
   overlay.addEventListener('click', (e)=>{ if(e.target===overlay) closeBlockPopover(); });
 
-  // Delegated click handler for timeline blocks
+  // Delegated click handler for timeline blocks — shows right detail panel
   document.getElementById('timeline-scroll').addEventListener('click', function(e){
     const block = e.target.closest('.clickable-block');
-    if (!block) return;
+    if(!block){ closeDetailPanel(); return; }
     const dateStr = block.dataset.date;
     const taskId = block.dataset.task;
-    if (dateStr && taskId) openBlockEdit(dateStr, taskId, e);
+    if(dateStr && taskId) showDetailPanel(dateStr, taskId);
   });
 
   // Drag-to-move for block edit popover
@@ -1425,44 +1446,34 @@ function renderTimeline() {
     if(!task)return;
     const taskType=block.taskType||task.taskType||'work';
     const nowM=new Date().getHours()*60+new Date().getMinutes();
-    // For in-progress blocks, always extend end to now
     const effectiveEnd = block.status==='in-progress' ? Math.max(block.end, nowM) : block.end;
     const naturalTop=(block.start-startM)*PX_PER_MIN;
-    const naturalH=(effectiveEnd-block.start)*PX_PER_MIN;
-    const isFixed=!!task.fixedTime;
-    const isCompact=naturalH<32;
-    const hasActions = !isCompact && (block.status==='scheduled'||block.status==='in-progress');
-    const MIN_H = isCompact ? 28 : hasActions ? 72 : 52;
-    const displayH=Math.max(naturalH, MIN_H);
+    const naturalH=Math.max((effectiveEnd-block.start)*PX_PER_MIN, 20); // min 20px so it's always clickable
+    const displayH=naturalH;
 
-    // Place below previous block — always leave a 2px gap
-    const visualTop=Math.max(naturalTop, visualBottom+2);
+    const visualTop=Math.max(naturalTop, visualBottom+1);
     visualBottom=visualTop+displayH;
 
     const proj=state.projects.find(p=>p.name===task.project);
+    const isFixed=!!task.fixedTime;
     const cls=block.status==='done'?'done-block':block.status==='in-progress'?'in-progress':'scheduled';
     const fixedCls=isFixed?' fixed-block':'';
-    const inProgressCls=block.status==='in-progress'?' in-progress-block':'';
-    const borderL=proj?`border-left:3px solid ${proj.color};padding-left:9px;`:'';
-    let actions='';
-    if(!isCompact){
-      if(block.status==='scheduled')
-        actions=`<div class="time-block-actions"><button class="block-btn start" onclick="event.stopPropagation();blockAction('${dateStr}','${block.taskId}','start')">▶ Start</button><button class="block-btn complete" onclick="event.stopPropagation();blockAction('${dateStr}','${block.taskId}','done')">✓ Done</button></div>`;
-      else if(block.status==='in-progress')
-        actions=`<div class="time-block-actions"><button class="block-btn complete" onclick="event.stopPropagation();blockAction('${dateStr}','${block.taskId}','done')">✓ Mark done</button></div>`;
-    }
-    const runningLabel = block.status==='in-progress' ? ' <span style="font-size:10px;opacity:0.7">▶ running</span>' : '';
-    // Compact single-line layout for short blocks
-    const content = isCompact
-      ? `<div style="display:flex;align-items:center;gap:6px;overflow:hidden">
-          <div class="time-block-name" style="flex:1;margin:0">${escHtml(task.name)}${block.chunk?' ···':''}</div>
-          <div class="time-block-time" style="flex-shrink:0;white-space:nowrap">${fmtTime(block.start)} · ${fmtDur(effectiveEnd-block.start)}</div>
-         </div>`
-      : `<div class="time-block-name">${escHtml(task.name)}${block.chunk?' ···':''}${isFixed?' 📌':''}${runningLabel}</div>
-         <div class="time-block-time">${fmtTime(block.start)}–${fmtTime(effectiveEnd)} · ${fmtDur(effectiveEnd-block.start)}</div>
-         ${actions}`;
+    const isSelected=selectedBlockTaskId===block.taskId;
+    const selectedCls=isSelected?' selected-block':'';
+    const accentBorder=proj?`border-left:3px solid ${proj.color};padding-left:7px;`
+      :taskType==='personal'?'border-left:3px solid var(--teal);padding-left:7px;'
+      :'border-left:3px solid var(--accent);padding-left:7px;';
+    const runningDot=block.status==='in-progress'?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:4px;vertical-align:middle"></span>':'';
+    // Single-line compact content always
+    const timeStr=naturalH<30?fmtTime(block.start):`${fmtTime(block.start)}–${fmtTime(effectiveEnd)}`;
+    const content=`<div style="display:flex;align-items:center;gap:4px;overflow:hidden;height:100%">
+      <div style="flex:1;overflow:hidden;min-width:0">
+        <div class="time-block-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;margin:0">${runningDot}${escHtml(task.name)}${block.chunk?' ···':''}</div>
+        ${naturalH>=34?`<div class="time-block-time" style="line-height:1.2">${timeStr} · ${fmtDur(effectiveEnd-block.start)}</div>`:''}
+      </div>
+    </div>`;
 
-    html+=`<div class="time-block ${taskType} ${cls}${fixedCls}${inProgressCls}${block.status!=='done'?' clickable-block':''}" data-date="${dateStr}" data-task="${block.taskId}" style="top:${visualTop}px;min-height:${displayH}px;${borderL};cursor:${block.status!=='done'?'pointer':'default'}">
+    html+=`<div class="time-block ${taskType} ${cls}${fixedCls}${selectedCls}${block.status!=='done'?' clickable-block':''}" data-date="${dateStr}" data-task="${block.taskId}" style="top:${visualTop}px;height:${displayH}px;${accentBorder};cursor:${block.status!=='done'?'pointer':'default'}">
       ${content}
     </div>`;
   });
@@ -2712,7 +2723,112 @@ function takeBreak(taskId, remainingMins){
   showToast(`Break taken — ${remainingMins} min remainder rescheduled ✓`);
 }
 
-// ── MOBILE SIDEBAR ────────────────────────────────────────────
+// ── TASK DETAIL PANEL (right panel) ───────────────────────────
+let selectedBlockTaskId = null;
+
+function showDetailPanel(dateStr, taskId){
+  selectedBlockTaskId = taskId;
+  const task = state.tasks.find(t=>t.id===taskId);
+  if(!task){ closeDetailPanel(); return; }
+  const sched = state.schedule[dateStr];
+  const block = sched?.blocks.find(b=>b.taskId===taskId);
+  const status = block?.status || task.blockStatus || 'scheduled';
+  const nowM = new Date().getHours()*60+new Date().getMinutes();
+  const effectiveEnd = status==='in-progress' ? Math.max(block?.end||0, nowM) : block?.end||0;
+
+  document.getElementById('detail-type-label').textContent = (task.taskType||'work').charAt(0).toUpperCase()+(task.taskType||'work').slice(1) + (task.priority?` · ${task.priority}`:'');
+  document.getElementById('detail-name').textContent = task.name;
+  document.getElementById('detail-time').textContent = block
+    ? `${fmtTime(block.start)}–${fmtTime(effectiveEnd)} · ${fmtDur(effectiveEnd-block.start)}`
+    : task.duration ? fmtDur(task.duration) : '';
+
+  // Status row — action buttons
+  const statusEl = document.getElementById('detail-status-row');
+  if(task.completed){
+    statusEl.innerHTML=`<div style="color:var(--green);font-size:13px;font-weight:600">✓ Completed</div>`;
+  } else if(status==='in-progress'){
+    statusEl.innerHTML=`
+      <div style="color:var(--accent);font-size:12px;font-weight:600;margin-bottom:4px">● Running · ${fmtDur(effectiveEnd-(block?.start||0))}</div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" style="flex:1;color:var(--amber);border-color:var(--amber)" onclick="takeBreakPrompt()">☕ Break</button>
+        <button class="btn btn-primary btn-sm" style="flex:1" onclick="completeFromDetail('${dateStr}','${taskId}')">✓ Done</button>
+      </div>`;
+  } else {
+    statusEl.innerHTML=`
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" style="flex:1;color:var(--accent);border-color:var(--accent)" onclick="startFromDetail('${dateStr}','${taskId}')">▶ Start</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;color:var(--green);border-color:var(--green)" onclick="completeFromDetail('${dateStr}','${taskId}')">✓ Done</button>
+      </div>`;
+  }
+
+  // Meta info
+  const metaEl = document.getElementById('detail-meta');
+  const rows = [];
+  if(task.project) rows.push(`<div style="font-size:12px;color:var(--text3)">Project: <span style="color:var(--text2)">${escHtml(task.project)}</span></div>`);
+  if(task.dueDate) rows.push(`<div style="font-size:12px;color:var(--text3)">Due: <span style="color:var(--text2)">${fmtDate(task.dueDate)}</span></div>`);
+  if(task.travelBefore||task.travelAfterMins){
+    const t=[];if(task.travelBefore)t.push(fmtDur(task.travelBefore)+' before');if(task.travelAfterMins)t.push(fmtDur(task.travelAfterMins)+' after');
+    rows.push(`<div style="font-size:12px;color:var(--text3)">🚗 ${t.join(', ')}</div>`);
+  }
+  if(task.notes) rows.push(`<div style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:4px">${escHtml(task.notes)}</div>`);
+  metaEl.innerHTML = rows.join('') || '<div style="font-size:12px;color:var(--text3)">No additional details</div>';
+
+  document.getElementById('task-detail-panel').style.display='flex';
+  document.getElementById('default-panel').style.display='none';
+
+  // Store for edit/break actions
+  editingBlock = {dateStr, taskId};
+}
+
+function closeDetailPanel(){
+  selectedBlockTaskId = null;
+  document.getElementById('task-detail-panel').style.display='none';
+  document.getElementById('default-panel').style.display='flex';
+  editingBlock = {dateStr:null, taskId:null};
+  renderTimeline(); // re-render to deselect block highlight
+}
+
+function openEditFromDetail(){
+  const {dateStr, taskId} = editingBlock;
+  if(!taskId) return;
+  openBlockEdit(dateStr, taskId, null);
+}
+
+function startFromDetail(dateStr, taskId){
+  const nowM=new Date().getHours()*60+new Date().getMinutes();
+  const sched=state.schedule[dateStr];
+  const block=sched?.blocks.find(b=>b.taskId===taskId);
+  const task=state.tasks.find(t=>t.id===taskId);
+  if(!block||!task) return;
+  const dur=block.end-block.start;
+  task.fixedTime=true;
+  task.fixedStart=minsToTime(nowM);
+  task.fixedEnd=minsToTime(nowM+dur);
+  task.blockStatus='in-progress';
+  task.updatedAt=Date.now();
+  block.start=nowM; block.end=nowM+dur; block.status='in-progress';
+  state.schedule={};
+  buildScheduleForDate(dateStr);
+  saveNow(); renderTimeline();
+  showDetailPanel(dateStr, taskId); // refresh panel
+  showToast('Task started ✓');
+}
+
+function completeFromDetail(dateStr, taskId){
+  const nowM=new Date().getHours()*60+new Date().getMinutes();
+  const task=state.tasks.find(t=>t.id===taskId);
+  if(task){ task.completed=true; task.completedAt=new Date().toISOString(); task.blockStatus=null; task.updatedAt=Date.now(); }
+  const sched=state.schedule[dateStr];
+  if(sched){
+    const block=sched.blocks.find(b=>b.taskId===taskId);
+    if(block){ block.status='done'; if(block.start<=nowM) block.end=Math.max(block.start+1,nowM); }
+  }
+  state.schedule={};
+  buildScheduleForDate(dateStr);
+  closeDetailPanel();
+  saveNow(); renderAll();
+  showToast('Task done ✓');
+}
 function toggleSidebar(){
   const sb=document.getElementById('sidebar') || document.querySelector('.sidebar');
   const bd=document.getElementById('sidebar-backdrop');

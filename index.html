@@ -190,7 +190,7 @@ input:checked + .toggle-slider:before { transform: translateX(14px); background:
 .time-block.personal.scheduled { background: var(--teal-soft); border-color: rgba(45,212,191,0.3); }
 .time-block.work.in-progress { background: rgba(123,110,246,0.18); border-color: rgba(123,110,246,0.45); }
 .time-block.personal.in-progress { background: rgba(45,212,191,0.15); border-color: rgba(45,212,191,0.4); }
-.time-block.done-block { background: var(--green-soft); border-color: rgba(74,222,128,0.2); opacity: 0.55; }
+.time-block.done-block { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.06); opacity: 0.65; cursor: default; }
 .time-block.break-block { background: rgba(255,255,255,0.025); border-color: var(--border); cursor: default; pointer-events: none; }
 .time-block.travel-block { background: repeating-linear-gradient(45deg, rgba(251,191,36,0.06), rgba(251,191,36,0.06) 4px, transparent 4px, transparent 8px); border-color: rgba(251,191,36,0.3); cursor: default; pointer-events: none; }
 .time-block.travel-block .time-block-name { color: var(--amber); font-size: 11px; }
@@ -198,7 +198,7 @@ input:checked + .toggle-slider:before { transform: translateX(14px); background:
 .time-block.work.fixed-block { background: rgba(123,110,246,0.2); border-color: var(--accent); }
 .time-block.personal.fixed-block { background: rgba(45,212,191,0.18); border-color: var(--teal); }
 .time-block-name { font-size: 12px; font-weight: 600; color: var(--text); line-height: 1.6; margin-bottom: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.time-block.done-block .time-block-name { text-decoration: line-through; color: var(--text3); }
+.time-block.done-block .time-block-name { text-decoration: line-through; color: var(--text3); font-weight: 400; }
 .time-block.break-block .time-block-name { color: var(--text3); font-weight: 400; }
 .time-block-time { font-size: 10px; color: var(--text3); font-family: 'DM Mono', monospace; line-height: 1.5; }
 .time-block-type { font-size: 10px; margin-top: 2px; }
@@ -1262,6 +1262,19 @@ function buildScheduleForDate(dateStr) {
   // Clear scheduledDate only for tasks previously assigned to THIS date
   state.tasks.forEach(t => { if (t.scheduledDate === dateStr) delete t.scheduledDate; });
 
+  // Preserve completed blocks from previous schedule — they stay locked to their actual times
+  const prevBlocks = state.schedule[dateStr]?.blocks || [];
+  const doneBlocks = prevBlocks.filter(b => b.status === 'done');
+
+  // Advance slot cursors past any done blocks so nothing gets scheduled on top of them
+  doneBlocks.forEach(b => {
+    slots.forEach(slot => {
+      if(slot.cursor < b.end && slot.end > b.start) {
+        slot.cursor = Math.max(slot.cursor, b.end);
+      }
+    });
+  });
+
   // Fixed-time tasks: place them first at their pinned time, blocking those slots
   const nowM2=new Date().getHours()*60+new Date().getMinutes();
   const fixedBlocks = [];
@@ -1271,18 +1284,15 @@ function buildScheduleForDate(dateStr) {
     t.dueDate === dateStr
   ).forEach(t => {
     const fs = timeToMins(t.fixedStart);
-    // If task is in-progress, extend end to now so other tasks schedule after it
     const fe = (t.blockStatus==='in-progress' && isToday)
       ? Math.max(timeToMins(t.fixedEnd), nowM2+1)
       : timeToMins(t.fixedEnd);
-    // Check for conflict with another fixed task
     const clash = fixedBlocks.find(b => b.start < fe && b.end > fs);
     if (clash) {
       fixedConflicts.push({a: clash.taskId, b: t.id});
     } else {
       fixedBlocks.push({taskId:t.id, start:fs, end:fe, status:t.blockStatus||'scheduled', taskType:t.taskType||'work', fixed:true});
       t.scheduledDate = dateStr;
-      // Advance cursors past this fixed block so auto-tasks don't overlap
       slots.forEach(slot => {
         if (slot.type === (t.taskType||'work') && slot.cursor < fe && slot.end > fs) {
           slot.cursor = Math.max(slot.cursor, fe);
@@ -1291,19 +1301,27 @@ function buildScheduleForDate(dateStr) {
     }
   });
 
-  // Show conflict warnings
+  // Also add completed fixed tasks as done blocks if not already in doneBlocks
+  state.tasks.filter(t =>
+    t.completed && t.fixedTime && t.fixedStart && t.fixedEnd &&
+    t.dueDate === dateStr &&
+    !doneBlocks.find(b => b.taskId === t.id)
+  ).forEach(t => {
+    const fs = timeToMins(t.fixedStart);
+    const fe = timeToMins(t.fixedEnd);
+    doneBlocks.push({taskId:t.id, start:fs, end:fe, status:'done', taskType:t.taskType||'work', fixed:true});
+  });
+
   fixedConflicts.forEach(({a,b}) => {
     const ta = state.tasks.find(t=>t.id===a), tb = state.tasks.find(t=>t.id===b);
     if(ta&&tb) showToast(`⚠ Time conflict: "${ta.name}" and "${tb.name}"`, 'amber');
   });
 
-  // Auto-schedule remaining eligible tasks
   const eligible = state.tasks.filter(t => {
     if (t.completed || !t.duration) return false;
-    if (t.fixedTime) return false; // fixed tasks handled above
+    if (t.fixedTime) return false;
     if (t.scheduledDate && t.scheduledDate !== dateStr) return false;
     if (!isToday && t.dueDate === todayStr()) return false;
-    // Respect start date — don't schedule before startDate
     if (t.startDate && t.startDate > dateStr) return false;
     return true;
   });
@@ -1324,7 +1342,7 @@ function buildScheduleForDate(dateStr) {
   const autoBlocks = [], overflow = [];
   for (const { task } of scored) placeTaskInSlots(task, slots, autoBlocks, overflow, dateStr);
 
-  state.schedule[dateStr] = { blocks: [...fixedBlocks, ...autoBlocks], overflow };
+  state.schedule[dateStr] = { blocks: [...doneBlocks, ...fixedBlocks, ...autoBlocks], overflow };
 }
 
 function reshuffleFromNow(dateStr) {
@@ -1464,11 +1482,12 @@ function renderTimeline() {
       :taskType==='personal'?'border-left:3px solid var(--teal);padding-left:7px;'
       :'border-left:3px solid var(--accent);padding-left:7px;';
     const runningDot=block.status==='in-progress'?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:4px;vertical-align:middle"></span>':'';
+    const doneTick=block.status==='done'?'<span style="color:var(--green);margin-right:3px;font-size:10px">✓</span>':'';
     // Single-line compact content always
     const timeStr=naturalH<30?fmtTime(block.start):`${fmtTime(block.start)}–${fmtTime(effectiveEnd)}`;
     const content=`<div style="display:flex;align-items:center;gap:4px;overflow:hidden;height:100%">
       <div style="flex:1;overflow:hidden;min-width:0">
-        <div class="time-block-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;margin:0">${runningDot}${escHtml(task.name)}${block.chunk?' ···':''}</div>
+        <div class="time-block-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;margin:0">${doneTick}${runningDot}${escHtml(task.name)}${block.chunk?' ···':''}</div>
         ${naturalH>=34?`<div class="time-block-time" style="line-height:1.2">${timeStr} · ${fmtDur(effectiveEnd-block.start)}</div>`:''}
       </div>
     </div>`;

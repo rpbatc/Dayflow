@@ -1419,8 +1419,11 @@ function renderTimeline() {
     const task=state.tasks.find(t=>t.id===block.taskId);
     if(!task)return;
     const taskType=block.taskType||task.taskType||'work';
+    const nowM=new Date().getHours()*60+new Date().getMinutes();
+    // For in-progress blocks, always extend end to now
+    const effectiveEnd = block.status==='in-progress' ? Math.max(block.end, nowM) : block.end;
     const naturalTop=(block.start-startM)*PX_PER_MIN;
-    const naturalH=(block.end-block.start)*PX_PER_MIN;
+    const naturalH=(effectiveEnd-block.start)*PX_PER_MIN;
     const isFixed=!!task.fixedTime;
     const isCompact=naturalH<40;
     const MIN_H=isCompact?28:52;
@@ -1433,6 +1436,7 @@ function renderTimeline() {
     const proj=state.projects.find(p=>p.name===task.project);
     const cls=block.status==='done'?'done-block':block.status==='in-progress'?'in-progress':'scheduled';
     const fixedCls=isFixed?' fixed-block':'';
+    const inProgressCls=block.status==='in-progress'?' in-progress-block':'';
     const borderL=proj?`border-left:3px solid ${proj.color};padding-left:9px;`:'';
     let actions='';
     if(naturalH>56&&!isCompact){
@@ -1441,17 +1445,18 @@ function renderTimeline() {
       else if(block.status==='in-progress')
         actions=`<div class="time-block-actions"><button class="block-btn complete" onclick="event.stopPropagation();blockAction('${dateStr}','${block.taskId}','done')">✓ Mark done</button></div>`;
     }
+    const runningLabel = block.status==='in-progress' ? ' <span style="font-size:10px;opacity:0.7">▶ running</span>' : '';
     // Compact single-line layout for short blocks
     const content = isCompact
       ? `<div style="display:flex;align-items:center;gap:6px;overflow:hidden">
           <div class="time-block-name" style="flex:1;margin:0">${escHtml(task.name)}${block.chunk?' ···':''}</div>
-          <div class="time-block-time" style="flex-shrink:0;white-space:nowrap">${fmtTime(block.start)} · ${fmtDur(block.end-block.start)}</div>
+          <div class="time-block-time" style="flex-shrink:0;white-space:nowrap">${fmtTime(block.start)} · ${fmtDur(effectiveEnd-block.start)}</div>
          </div>`
-      : `<div class="time-block-name">${escHtml(task.name)}${block.chunk?' ···':''}${isFixed?' 📌':''}</div>
-         <div class="time-block-time">${fmtTime(block.start)}–${fmtTime(block.end)} · ${fmtDur(block.end-block.start)}</div>
+      : `<div class="time-block-name">${escHtml(task.name)}${block.chunk?' ···':''}${isFixed?' 📌':''}${runningLabel}</div>
+         <div class="time-block-time">${fmtTime(block.start)}–${fmtTime(effectiveEnd)} · ${fmtDur(effectiveEnd-block.start)}</div>
          ${actions}`;
 
-    html+=`<div class="time-block ${taskType} ${cls}${fixedCls}${block.status!=='done'?' clickable-block':''}" data-date="${dateStr}" data-task="${block.taskId}" style="top:${visualTop}px;min-height:${displayH}px;${borderL};cursor:${block.status!=='done'?'pointer':'default'}">
+    html+=`<div class="time-block ${taskType} ${cls}${fixedCls}${inProgressCls}${block.status!=='done'?' clickable-block':''}" data-date="${dateStr}" data-task="${block.taskId}" style="top:${visualTop}px;min-height:${displayH}px;${borderL};cursor:${block.status!=='done'?'pointer':'default'}">
       ${content}
     </div>`;
   });

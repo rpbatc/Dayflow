@@ -1242,13 +1242,18 @@ function buildScheduleForDate(dateStr) {
   state.tasks.forEach(t => { if (t.scheduledDate === dateStr) delete t.scheduledDate; });
 
   // Fixed-time tasks: place them first at their pinned time, blocking those slots
+  const nowM2=new Date().getHours()*60+new Date().getMinutes();
   const fixedBlocks = [];
   const fixedConflicts = [];
   state.tasks.filter(t =>
     !t.completed && t.fixedTime && t.fixedStart && t.fixedEnd &&
     t.dueDate === dateStr
   ).forEach(t => {
-    const fs = timeToMins(t.fixedStart), fe = timeToMins(t.fixedEnd);
+    const fs = timeToMins(t.fixedStart);
+    // If task is in-progress, extend end to now so other tasks schedule after it
+    const fe = (t.blockStatus==='in-progress' && isToday)
+      ? Math.max(timeToMins(t.fixedEnd), nowM2+1)
+      : timeToMins(t.fixedEnd);
     // Check for conflict with another fixed task
     const clash = fixedBlocks.find(b => b.start < fe && b.end > fs);
     if (clash) {
@@ -1549,14 +1554,14 @@ function startNowTick(){
     const today=todayStr();
     const nowM=new Date().getHours()*60+new Date().getMinutes();
 
-    // Extend any in-progress blocks to current time
+    // Extend any in-progress blocks to current time — update in-place, no rebuild
     const sched=state.schedule[today];
-    let needsRender=false;
+    let hasInProgress=false;
     if(sched){
       sched.blocks.forEach(block=>{
-        if(block.status==='in-progress'&&block.end<nowM){
-          block.end=nowM+1; // extend to now+1 so it's visually clear it's running
-          needsRender=true;
+        if(block.status==='in-progress'){
+          block.end=nowM+1;
+          hasInProgress=true;
         }
       });
     }
@@ -1568,7 +1573,7 @@ function startNowTick(){
       const startM=allStarts.length?Math.min(...allStarts):0;
       line.style.top=((nowM-startM)*PX_PER_MIN)+'px';
       const lbl=line.querySelector('.now-time-label');if(lbl)lbl.textContent=fmtTime(nowM);
-      if(needsRender) renderTimeline();
+      if(hasInProgress) renderTimeline(); // re-render visuals only, no rebuild
     }
   },30000);
 }

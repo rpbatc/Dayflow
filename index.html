@@ -1541,14 +1541,29 @@ let nowTick;
 function startNowTick(){
   clearInterval(nowTick);
   nowTick=setInterval(()=>{
-    if(state.currentView==='timeline'&&state.viewingDate===todayStr()){
+    const today=todayStr();
+    const nowM=new Date().getHours()*60+new Date().getMinutes();
+
+    // Extend any in-progress blocks to current time
+    const sched=state.schedule[today];
+    let needsRender=false;
+    if(sched){
+      sched.blocks.forEach(block=>{
+        if(block.status==='in-progress'&&block.end<nowM){
+          block.end=nowM+1; // extend to now+1 so it's visually clear it's running
+          needsRender=true;
+        }
+      });
+    }
+
+    if(state.currentView==='timeline'&&state.viewingDate===today){
       const line=document.getElementById('now-line');if(!line)return;
-      const s=getDaySettings(todayStr());
+      const s=getDaySettings(today);
       const allStarts=s.slots.map(sl=>timeToMins(sl.start));
       const startM=allStarts.length?Math.min(...allStarts):0;
-      const now=new Date(),nowM=now.getHours()*60+now.getMinutes();
       line.style.top=((nowM-startM)*PX_PER_MIN)+'px';
       const lbl=line.querySelector('.now-time-label');if(lbl)lbl.textContent=fmtTime(nowM);
+      if(needsRender) renderTimeline();
     }
   },30000);
 }
@@ -2467,9 +2482,15 @@ function openBlockEdit(dateStr,taskId,event){
     <div class="popover-field">
       <div class="popover-label">Status</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        ${status!=='in-progress'&&!task.completed?`<button class="quick-btn" style="color:var(--accent);border-color:var(--accent)" onclick="startFromPopover()">▶ Start now</button>`:''}
-        ${status==='in-progress'?`<span style="font-size:12px;color:var(--accent);font-weight:600">▶ In progress</span>`:''}
-        ${task.completed?`<span style="font-size:12px;color:var(--green);font-weight:600">✓ Completed</span>`:`<button class="quick-btn" style="color:var(--green);border-color:var(--green)" onclick="completeFromPopover()">✓ Mark done</button>`}
+        ${status==='in-progress'
+          ? `<span style="font-size:12px;color:var(--accent);font-weight:600;align-self:center">▶ In progress</span>
+             <button class="quick-btn" style="color:var(--amber);border-color:var(--amber)" onclick="takeBreakPrompt()">☕ Take a break</button>
+             <button class="quick-btn" style="color:var(--green);border-color:var(--green)" onclick="completeFromPopover()">✓ Done</button>`
+          : task.completed
+            ? `<span style="font-size:12px;color:var(--green);font-weight:600">✓ Completed</span>`
+            : `<button class="quick-btn" style="color:var(--accent);border-color:var(--accent)" onclick="startFromPopover()">▶ Start now</button>
+               <button class="quick-btn" style="color:var(--green);border-color:var(--green)" onclick="completeFromPopover()">✓ Mark done</button>`
+        }
       </div>
     </div>
     <div class="popover-field">
@@ -2530,18 +2551,23 @@ function startFromPopover(){
   if(!block||!task)return;
   const dur=block.end-block.start;
 
-  // Lock the task to this exact time — make it fixed
+  // Lock the task to this exact start time
   task.fixedTime=true;
   task.fixedStart=minsToTime(nowM);
   task.fixedEnd=minsToTime(nowM+dur);
-  task.lockedStart=nowM; // remember locked start for rendering
+  task.updatedAt=Date.now();
 
-  block.start=nowM;block.end=nowM+dur;block.status='in-progress';
+  // Update the block immediately
+  block.start=nowM;
+  block.end=nowM+dur;
+  block.status='in-progress';
+
   closeBlockPopover();
+  // Rebuild so everything else reshuffles around the locked block
   state.schedule={};
   buildScheduleForDate(dateStr);
   saveNow();renderAll();
-  showToast('Task started and locked ✓');
+  showToast('Task started — block will extend until you mark done ✓');
 }
 
 let _peType=null,_pePriority=null;
@@ -2586,15 +2612,21 @@ function saveBlockEdit(){
 }
 
 function completeFromPopover(){
-  const task = state.tasks.find(t=>t.id===editingBlock.taskId);
+  const nowM=new Date().getHours()*60+new Date().getMinutes();
+  const task=state.tasks.find(t=>t.id===editingBlock.taskId);
   if(task){ task.completed=true; task.completedAt=new Date().toISOString(); task.updatedAt=Date.now(); }
-  // Also mark the block done if it exists on the timeline
-  const sched = state.schedule[editingBlock.dateStr];
-  if(sched){ const block=sched.blocks.find(b=>b.taskId===editingBlock.taskId); if(block)block.status='done'; }
+  const sched=state.schedule[editingBlock.dateStr];
+  if(sched){
+    const block=sched.blocks.find(b=>b.taskId===editingBlock.taskId);
+    if(block){
+      block.status='done';
+      if(block.start<=nowM) block.end=Math.max(block.start+1, nowM);
+    }
+  }
   state.schedule={};
   buildScheduleForDate(editingBlock.dateStr||todayStr());
-  saveNow();renderAll();
   closeBlockPopover();
+  saveNow();renderAll();
   showToast('Task done ✓');
 }
 
@@ -2602,6 +2634,69 @@ function closeBlockPopover(){
   document.getElementById('block-popover-overlay').className='popover-overlay';
   _peType=null;_pePriority=null;
   editingBlock={dateStr:null,taskId:null};
+}
+
+function takeBreakPrompt(){
+  closeBlockPopover();
+  const taskId=editingBlock?.taskId||_breakTaskId;
+  const task=state.tasks.find(t=>t.id===taskId);
+  if(!task)return;
+  _breakTaskId=taskId;
+
+  // Show a simple inline prompt using a modal
+  const mins=prompt(`How many minutes left to finish "${task.name}"?`);
+  if(mins===null)return; // cancelled
+  const remaining=parseInt(mins);
+  if(isNaN(remaining)||remaining<1){showToast('Enter a valid number of minutes','amber');return;}
+  takeBreak(taskId, remaining);
+}
+
+let _breakTaskId=null;
+
+function takeBreak(taskId, remainingMins){
+  const nowM=new Date().getHours()*60+new Date().getMinutes();
+  const dateStr=todayStr();
+  const task=state.tasks.find(t=>t.id===taskId);
+  if(!task)return;
+
+  // End the current block at now
+  const sched=state.schedule[dateStr];
+  if(sched){
+    const block=sched.blocks.find(b=>b.taskId===taskId);
+    if(block){
+      block.end=Math.max(block.start+1, nowM);
+      block.status='done'; // this portion is done
+    }
+  }
+
+  // Create a new task for the remainder
+  const remainder={
+    id: Date.now().toString(),
+    name: task.name + ' (cont.)',
+    priority: task.priority,
+    duration: remainingMins,
+    dueDate: task.dueDate,
+    taskType: task.taskType,
+    project: task.project,
+    notes: task.notes,
+    chunkable: task.chunkable,
+    chunkMin: task.chunkMin,
+    completed: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: Date.now(),
+    parentTaskId: taskId // link back to original
+  };
+  state.tasks.unshift(remainder);
+
+  // Mark original as partially done (not fully complete)
+  task.partialDone=true;
+  task.updatedAt=Date.now();
+
+  // Rebuild schedule — the remainder task will be auto-scheduled into next available slot
+  state.schedule={};
+  buildScheduleForDate(dateStr);
+  saveNow();renderAll();
+  showToast(`Break taken — ${remainingMins} min remainder rescheduled ✓`);
 }
 
 // ── MOBILE SIDEBAR ────────────────────────────────────────────

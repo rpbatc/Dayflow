@@ -1211,24 +1211,59 @@ function buildCursoredSlots(dateStr, fromMins) {
     .map(s => ({ ...s, cursor: s.start }));
 }
 
-function placeTaskInSlots(task, slots, blocks, overflow, dateStr) {
+function placeTaskInSlots(task, slots, blocks, overflow, dateStr, allBlocks) {
   const taskType = task.taskType || 'work';
   const dur = task.duration;
   const travelBefore = task.travelBefore || 0;
   const travelAfter = task.travelAfterMins || 0;
   const totalDur = dur + travelBefore + travelAfter;
+
+  // Dependency: find parent block's end time
+  let notBefore = 0;
+  if (task.dependsOn) {
+    // Check auto blocks placed so far, fixed blocks, and done blocks
+    const parentBlock = (allBlocks||[]).find(b => b.taskId === task.dependsOn)
+      || (state.schedule[dateStr]?.blocks||[]).find(b=>b.taskId===task.dependsOn);
+    if (parentBlock) {
+      if (task.dependsGlued) {
+        // Glued: must start exactly when parent ends
+        // Advance slot cursor to parent end for matching slot type
+        const parentEnd = parentBlock.end;
+        slots.forEach(slot => {
+          if (slot.type === taskType && slot.cursor < parentEnd) {
+            slot.cursor = parentEnd;
+          }
+        });
+        notBefore = parentEnd;
+      } else {
+        // Loose: must start after parent ends
+        notBefore = parentBlock.end;
+        slots.forEach(slot => {
+          if (slot.type === taskType && slot.cursor < notBefore) {
+            slot.cursor = notBefore;
+          }
+        });
+      }
+    } else {
+      // Parent not yet scheduled — check if parent task is complete
+      const parentTask = state.tasks.find(t => t.id === task.dependsOn);
+      if (parentTask && !parentTask.completed) {
+        // Parent not placed and not done — can't schedule this yet
+        overflow.push(task.id);
+        return;
+      }
+    }
+  }
+
   const matching = slots.filter(s => s.type === taskType);
   let placed = false;
   for (const slot of matching) {
     const avail = slot.end - slot.cursor;
     if (avail >= totalDur) {
-      // Place travel-before block
       if (travelBefore > 0) {
         blocks.push({taskId:task.id+'_travel_before', start:slot.cursor, end:slot.cursor+travelBefore, status:'travel', taskType, travelBlock:true, label:'Travel to '+task.name});
       }
-      // Place main task block
-      blocks.push({taskId:task.id, start:slot.cursor+travelBefore, end:slot.cursor+travelBefore+dur, status:'scheduled', taskType});
-      // Place travel-after block
+      blocks.push({taskId:task.id, start:slot.cursor+travelBefore, end:slot.cursor+travelBefore+dur, status:'scheduled', taskType, dependsOn:task.dependsOn||null, glued:task.dependsGlued||false});
       if (travelAfter > 0) {
         blocks.push({taskId:task.id+'_travel_after', start:slot.cursor+travelBefore+dur, end:slot.cursor+totalDur, status:'travel', taskType, travelBlock:true, label:'Travel from '+task.name});
       }
@@ -1336,11 +1371,27 @@ function buildScheduleForDate(dateStr) {
       const daysAway = Math.round((Date.UTC(dy,dm-1,dd) - Date.UTC(sy,sm-1,sd)) / 86400000);
       score += Math.max(0, 100 - daysAway * 5);
     }
+    // Tasks with dependencies score lower so parents are placed first
+    if (t.dependsOn) score -= 200;
     return { task:t, score };
   }).sort((a,b) => b.score - a.score);
 
+  // Topological sort — ensure dependency always placed before dependent
+  const ordered = [];
+  const placed = new Set();
+  const addTask = (entry) => {
+    if(placed.has(entry.task.id)) return;
+    if(entry.task.dependsOn) {
+      const parentEntry = scored.find(e => e.task.id === entry.task.dependsOn);
+      if(parentEntry && !placed.has(parentEntry.task.id)) addTask(parentEntry);
+    }
+    ordered.push(entry);
+    placed.add(entry.task.id);
+  };
+  scored.forEach(e => addTask(e));
+
   const autoBlocks = [], overflow = [];
-  for (const { task } of scored) placeTaskInSlots(task, slots, autoBlocks, overflow, dateStr);
+  for (const { task } of ordered) placeTaskInSlots(task, slots, autoBlocks, overflow, dateStr, autoBlocks);
 
   state.schedule[dateStr] = { blocks: [...doneBlocks, ...fixedBlocks, ...autoBlocks], overflow };
 }
@@ -1481,13 +1532,14 @@ function renderTimeline() {
     const accentBorder=proj?`border-left:3px solid ${proj.color};padding-left:7px;`
       :taskType==='personal'?'border-left:3px solid var(--teal);padding-left:7px;'
       :'border-left:3px solid var(--accent);padding-left:7px;';
+    const depIndicator = block.dependsOn ? (block.glued?'<span style="font-size:9px;opacity:0.6;margin-left:2px">⛓</span>':'<span style="font-size:9px;opacity:0.6;margin-left:2px">↓</span>') : '';
     const runningDot=block.status==='in-progress'?'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:4px;vertical-align:middle"></span>':'';
     const doneTick=block.status==='done'?'<span style="color:var(--green);margin-right:3px;font-size:10px">✓</span>':'';
     // Single-line compact content always
     const timeStr=naturalH<30?fmtTime(block.start):`${fmtTime(block.start)}–${fmtTime(effectiveEnd)}`;
     const content=`<div style="display:flex;align-items:center;gap:4px;overflow:hidden;height:100%">
       <div style="flex:1;overflow:hidden;min-width:0">
-        <div class="time-block-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;margin:0">${doneTick}${runningDot}${escHtml(task.name)}${block.chunk?' ···':''}</div>
+        <div class="time-block-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;margin:0">${doneTick}${runningDot}${escHtml(task.name)}${block.chunk?' ···':''}${depIndicator}</div>
         ${naturalH>=34?`<div class="time-block-time" style="line-height:1.2">${timeStr} · ${fmtDur(effectiveEnd-block.start)}</div>`:''}
       </div>
     </div>`;
@@ -1566,15 +1618,21 @@ function toggleFloatTask(id){
 function blockAction(dateStr,taskId,action){
   const sched=state.schedule[dateStr];if(!sched)return;
   const block=sched.blocks.find(b=>b.taskId===taskId);if(!block)return;
-  if(action==='start'){block.status='in-progress';}
-  else if(action==='done'){
-    block.status='done';
+  const nowM=new Date().getHours()*60+new Date().getMinutes();
+  if(action==='start'){
+    block.status='in-progress';
+    saveNow();renderTimeline();renderCounts();
+  } else if(action==='done'){
     const task=state.tasks.find(t=>t.id===taskId);
-    if(task)task.completed=true;
-    if(dateStr===todayStr())reshuffleFromNow(dateStr);
+    // Snap end to now
+    if(block.start<=nowM) block.end=Math.max(block.start+1, nowM);
+    block.status='done';
+    if(task){ task.completed=true; task.blockStatus=null; task.updatedAt=Date.now(); }
+    // Don't wipe schedule — preserve done block, just rebuild around it
+    buildScheduleForDate(dateStr);
+    saveNow();renderAll();
     showToast('Done — schedule updated ✓');
   }
-  saveNow();renderTimeline();renderCounts();renderProjectList();
 }
 
 // ── NOW LINE ───────────────────────────────────────────────────
@@ -2573,7 +2631,29 @@ function openBlockEdit(dateStr,taskId,event){
           <input class="popover-input" id="pe-fixedend" type="time" value="${task.fixedEnd||''}" style="flex:1"/>
         </div>
       </div>
+    </div>
+    <div class="popover-field">
+      <div class="popover-label">Depends on</div>
+      <select class="popover-input" id="pe-depends-on" style="color-scheme:dark">
+        <option value="">None</option>
+        ${state.tasks.filter(t=>t.id!==task.id&&!t.completed).map(t=>`<option value="${t.id}" ${task.dependsOn===t.id?'selected':''}>${escHtml(t.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="popover-field" id="pe-dep-mode-row" style="display:${task.dependsOn?'block':'none'}">
+      <div class="popover-label">Scheduling</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="quick-btn ${task.dependsGlued!==false?'selected':''}" id="pe-dep-glued" onclick="pDepMode('glued',this)">⛓ Immediately after</button>
+        <button class="quick-btn ${task.dependsGlued===false?'selected':''}" id="pe-dep-loose" onclick="pDepMode('loose',this)">↓ At some point after</button>
+      </div>
     </div>`;
+
+  // Wire up depends-on select to show/hide mode row
+  setTimeout(()=>{
+    const sel=document.getElementById('pe-depends-on');
+    if(sel) sel.addEventListener('change',()=>{
+      document.getElementById('pe-dep-mode-row').style.display=sel.value?'block':'none';
+    });
+  },0);
 
   // Reset any drag positioning — popover is now flex-centred
   const popover=document.getElementById('block-popover');
@@ -2612,7 +2692,12 @@ function startFromPopover(){
   showToast('Task started — block will extend until you mark done ✓');
 }
 
-let _peType=null,_pePriority=null;
+let _peDepMode=null;
+function pDepMode(mode,btn){
+  _peDepMode=mode;
+  btn.parentElement.querySelectorAll('.quick-btn').forEach(b=>b.classList.remove('selected'));
+  btn.classList.add('selected');
+}
 function peType(val,btn){
   _peType=val;
   btn.parentElement.querySelectorAll('.quick-btn').forEach(b=>b.classList.remove('selected'));
@@ -2645,7 +2730,17 @@ function saveBlockEdit(){
   }
   if(_peType)task.taskType=_peType;
   if(_pePriority)task.priority=_pePriority;
-  _peType=null;_pePriority=null;
+  // Save dependency
+  const depSel=document.getElementById('pe-depends-on');
+  if(depSel){
+    task.dependsOn=depSel.value||null;
+    if(task.dependsOn){
+      task.dependsGlued=(_peDepMode||'glued')==='glued';
+    } else {
+      task.dependsOn=null;task.dependsGlued=null;
+    }
+  }
+  _peType=null;_pePriority=null;_peDepMode=null;
   state.schedule={};
   buildScheduleForDate(editingBlock.dateStr);
   saveNow();renderTimeline();renderCounts();
@@ -2657,7 +2752,8 @@ function completeFromPopover(){
   const nowM=new Date().getHours()*60+new Date().getMinutes();
   const task=state.tasks.find(t=>t.id===editingBlock.taskId);
   if(task){ task.completed=true; task.completedAt=new Date().toISOString(); task.updatedAt=Date.now(); task.blockStatus=null; }
-  const sched=state.schedule[editingBlock.dateStr];
+  const dateStr=editingBlock.dateStr||todayStr();
+  const sched=state.schedule[dateStr];
   if(sched){
     const block=sched.blocks.find(b=>b.taskId===editingBlock.taskId);
     if(block){
@@ -2665,8 +2761,8 @@ function completeFromPopover(){
       if(block.start<=nowM) block.end=Math.max(block.start+1, nowM);
     }
   }
-  state.schedule={};
-  buildScheduleForDate(editingBlock.dateStr||todayStr());
+  // Don't wipe schedule — preserve the done block with its snapped end time
+  buildScheduleForDate(dateStr);
   closeBlockPopover();
   saveNow();renderAll();
   showToast('Task done ✓');
@@ -2789,7 +2885,10 @@ function showDetailPanel(dateStr, taskId){
     const t=[];if(task.travelBefore)t.push(fmtDur(task.travelBefore)+' before');if(task.travelAfterMins)t.push(fmtDur(task.travelAfterMins)+' after');
     rows.push(`<div style="font-size:12px;color:var(--text3)">🚗 ${t.join(', ')}</div>`);
   }
-  if(task.notes) rows.push(`<div style="font-size:12px;color:var(--text3);line-height:1.5;margin-top:4px">${escHtml(task.notes)}</div>`);
+  if(task.dependsOn){
+    const parent=state.tasks.find(t=>t.id===task.dependsOn);
+    if(parent) rows.push(`<div style="font-size:12px;color:var(--text3)">${task.dependsGlued?'⛓ Immediately after':'↓ After'}: <span style="color:var(--text2)">${escHtml(parent.name)}</span></div>`);
+  }
   metaEl.innerHTML = rows.join('') || '<div style="font-size:12px;color:var(--text3)">No additional details</div>';
 
   document.getElementById('task-detail-panel').style.display='flex';
@@ -2842,7 +2941,9 @@ function completeFromDetail(dateStr, taskId){
     const block=sched.blocks.find(b=>b.taskId===taskId);
     if(block){ block.status='done'; if(block.start<=nowM) block.end=Math.max(block.start+1,nowM); }
   }
-  state.schedule={};
+  // Don't wipe the whole schedule — buildScheduleForDate will handle this date
+  // The done block with snapped end time is already in state.schedule[dateStr]
+  // Delete only this date so buildScheduleForDate re-uses prevBlocks correctly
   buildScheduleForDate(dateStr);
   closeDetailPanel();
   saveNow(); renderAll();

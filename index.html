@@ -1297,6 +1297,15 @@ function buildScheduleForDate(dateStr) {
   // Clear scheduledDate only for tasks previously assigned to THIS date
   state.tasks.forEach(t => { if (t.scheduledDate === dateStr) delete t.scheduledDate; });
 
+  // For today's build: also clear stale scheduled dates in the past so tasks get rescheduled into today
+  if (isToday) {
+    state.tasks.forEach(t => {
+      if (t.scheduledDate && t.scheduledDate < dateStr && !t.completed && !t.fixedTime) {
+        delete t.scheduledDate;
+      }
+    });
+  }
+
   // Preserve completed blocks from previous schedule — they stay locked to their actual times
   const prevBlocks = state.schedule[dateStr]?.blocks || [];
   const doneBlocks = prevBlocks.filter(b => b.status === 'done');
@@ -2335,7 +2344,8 @@ function renderTaskList(){
     const prioTag=task.priority?`<span class="tag tag-${task.priority}">${task.priority}</span>`:'';
     const durTag=task.duration?`<span class="tag tag-duration">⏱ ${fmtDur(task.duration)}</span>`:'';
     const dateTag=task.dueDate?`<span class="tag ${overdue?'tag-overdue':'tag-due'}">📅 ${fmtDate(task.dueDate)}</span>`:'';
-    const schedTag=task.scheduledDate&&task.scheduledDate!==task.dueDate?`<span class="tag tag-scheduled">Sched ${fmtDate(task.scheduledDate)}</span>`:'';
+    const schedTag=task.scheduledDate&&task.scheduledDate!==task.dueDate&&task.scheduledDate>=todayStr()
+      ?`<span class="tag tag-scheduled">Sched ${dateLabel(task.scheduledDate)}</span>`:'';
     const travelTag=(task.travelBefore||task.travelAfterMins)?'<span class="tag" style="background:var(--amber-soft);color:var(--amber)">🚗 travel</span>':'';
     const notesLine=task.notes?`<div class="task-notes">${escHtml(task.notes)}</div>`:'';
     return`<div class="task-card ${task.completed?'completed':''}" onclick="openTaskEdit('${task.id}',event)">

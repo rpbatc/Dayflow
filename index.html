@@ -192,6 +192,8 @@ input:checked + .toggle-slider:before { transform: translateX(14px); background:
 .time-block.personal.in-progress { background: rgba(45,212,191,0.15); border-color: rgba(45,212,191,0.4); }
 .time-block.done-block { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.06); opacity: 0.65; cursor: default; }
 .time-block.break-block { background: rgba(255,255,255,0.025); border-color: var(--border); cursor: default; pointer-events: none; }
+.time-block.blocked-period-block { background: repeating-linear-gradient(135deg, rgba(248,113,113,0.06), rgba(248,113,113,0.06) 4px, transparent 4px, transparent 10px); border-color: rgba(248,113,113,0.25); border-left: 3px solid rgba(248,113,113,0.5); cursor: default; pointer-events: none; }
+.time-block.blocked-period-block .time-block-name { color: #f87171; font-weight: 500; }
 .time-block.travel-block { background: repeating-linear-gradient(45deg, rgba(251,191,36,0.06), rgba(251,191,36,0.06) 4px, transparent 4px, transparent 8px); border-color: rgba(251,191,36,0.3); cursor: default; pointer-events: none; }
 .time-block.travel-block .time-block-name { color: var(--amber); font-size: 11px; }
 .time-block.fixed-block { border-style: solid; border-width: 1.5px; }
@@ -747,6 +749,13 @@ input:checked + .toggle-slider:before { transform: translateX(14px); background:
       <button class="add-break-btn" onclick="addStop()">+ Add hard stop</button>
     </div>
 
+    <div class="modal-section" style="margin-top:14px">
+      <div class="modal-section-title">Blocked periods</div>
+      <p style="font-size:12px;color:var(--text3);margin-bottom:10px">Block out time for holiday, appointments, travel etc. Nothing auto-schedules here. Toggle "Allow tasks" to manually assign specific tasks to run within this block.</p>
+      <div id="blocks-list"></div>
+      <button class="add-break-btn" onclick="addDayBlock()" style="color:#f87171">+ Add blocked period</button>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('day-settings-modal')">Cancel</button>
       <button class="btn btn-ghost" onclick="resetDaySettings()" style="color:var(--text3)">Reset to defaults</button>
@@ -837,7 +846,7 @@ let state = {
   viewingDate:'', daySettings:{}, schedule:{},
   savedLocations:[] // [{name:'home', address:'14 Acacia Ave, Hackney, London'}]
 };
-let tempSlots=[], tempBreaks=[], tempStops=[];
+let tempSlots=[], tempBreaks=[], tempStops=[], tempBlocks=[];
 
 // ── GOOGLE DRIVE SYNC ─────────────────────────────────────────
 const GOOG_CLIENT_ID = '520774618906-jbupm1s9jartsvflf52o44ungekm3636.apps.googleusercontent.com';
@@ -1174,18 +1183,21 @@ function getFreeSlotsByType(dateStr) {
   const s = getDaySettings(dateStr);
   const breaks = s.breaks.map(b=>({start:timeToMins(b.start),end:timeToMins(b.end)}));
   const stops = s.stops.map(st=>timeToMins(st.time));
+  // Blocked periods without allowTasks act as breaks
+  const blockedPeriods = (s.blocks||[]).filter(b=>!b.allowTasks).map(b=>({start:timeToMins(b.start),end:timeToMins(b.end)}));
+  const allBreaks = [...breaks, ...blockedPeriods];
 
   const result=[];
   for (const slot of s.slots) {
     let slotStart=timeToMins(slot.start), slotEnd=timeToMins(slot.end);
 
-    // Apply hard stops — if a stop falls within this slot, truncate it
+    // Apply hard stops
     for (const stopTime of stops) {
       if (stopTime > slotStart && stopTime < slotEnd) slotEnd = stopTime;
     }
 
-    // Subtract breaks that fall within this slot
-    const slotBreaks = breaks.filter(b => b.end > slotStart && b.start < slotEnd).sort((a,b)=>a.start-b.start);
+    // Subtract breaks + blocked periods that fall within this slot
+    const slotBreaks = allBreaks.filter(b => b.end > slotStart && b.start < slotEnd).sort((a,b)=>a.start-b.start);
     let cur = slotStart;
     for (const bl of slotBreaks) {
       if (bl.start > cur) result.push({type:slot.type, start:cur, end:Math.min(bl.start,slotEnd)});
@@ -1217,6 +1229,16 @@ function placeTaskInSlots(task, slots, blocks, overflow, dateStr, allBlocks) {
   const travelBefore = task.travelBefore || 0;
   const travelAfter = task.travelAfterMins || 0;
   const totalDur = dur + travelBefore + travelAfter;
+
+  // If task is assigned to run within a blocked period, schedule it there instead
+  if (task.allowedBlock) {
+    const [bStart, bEnd] = task.allowedBlock.split('-').map(Number);
+    if (!isNaN(bStart) && !isNaN(bEnd) && bEnd - bStart >= dur) {
+      blocks.push({taskId:task.id, start:bStart+travelBefore, end:bStart+travelBefore+dur, status:'scheduled', taskType, inBlock:true});
+      task.scheduledDate = dateStr;
+      return;
+    }
+  }
 
   // Dependency: find parent block's end time
   let notBefore = 0;
@@ -1516,6 +1538,17 @@ function renderTimeline() {
     }
   });
 
+  // Blocked periods
+  (settings.blocks||[]).forEach(b=>{
+    const bs=timeToMins(b.start),be=timeToMins(b.end);
+    const top=(bs-startM)*PX_PER_MIN,h=Math.max((be-bs)*PX_PER_MIN,24);
+    const allowBadge=b.allowTasks?'<span style="font-size:9px;background:rgba(251,191,36,0.2);color:var(--amber);border-radius:3px;padding:1px 4px;margin-left:4px">tasks allowed</span>':'';
+    html+=`<div class="time-block blocked-period-block" style="top:${top}px;height:${h}px">
+      <div class="time-block-name">${escHtml(b.label||'Blocked')}${allowBadge}</div>
+      <div class="time-block-time">${fmtTime(bs)} – ${fmtTime(be)}</div>
+    </div>`;
+  });
+
   // Task blocks — single shared visual cursor to prevent any overlap
   let visualBottom = 0; // tracks the bottom pixel of the last rendered block
   const sortedBlocks = [...sched.blocks].sort((a,b)=>a.start-b.start);
@@ -1702,7 +1735,8 @@ function openDaySettings(){
   tempSlots=s.slots.map(sl=>({...sl}));
   tempBreaks=s.breaks.map(b=>({...b}));
   tempStops=(s.stops||[]).map(st=>({...st}));
-  renderSlotRows();renderBreaksList();renderStopsList();
+  tempBlocks=(s.blocks||[]).map(b=>({...b}));
+  renderSlotRows();renderBreaksList();renderStopsList();renderBlocksList();
   openModal('day-settings-modal');
 }
 
@@ -1750,8 +1784,29 @@ function removeBreak(i){tempBreaks.splice(i,1);renderBreaksList();}
 function addStop(){tempStops.push({time:'15:00',label:''});renderStopsList();}
 function removeStop(i){tempStops.splice(i,1);renderStopsList();}
 
+function renderBlocksList(){
+  document.getElementById('blocks-list').innerHTML=tempBlocks.map((b,i)=>
+    `<div class="break-row" style="flex-wrap:wrap;gap:6px">
+      <input class="modal-input" type="time" value="${b.start||'09:00'}" oninput="tempBlocks[${i}].start=this.value" style="flex:1;min-width:80px"/>
+      <input class="modal-input" type="time" value="${b.end||'17:00'}" oninput="tempBlocks[${i}].end=this.value" style="flex:1;min-width:80px"/>
+      <input class="modal-input" type="text" value="${b.label||''}" placeholder="Label e.g. Annual Leave" oninput="tempBlocks[${i}].label=this.value" style="flex:2;min-width:120px"/>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text3);cursor:pointer;flex-shrink:0">
+        <input type="checkbox" ${b.allowTasks?'checked':''} onchange="tempBlocks[${i}].allowTasks=this.checked"/>
+        Allow tasks
+      </label>
+      <button class="remove-btn" onclick="removeDayBlock(${i})">✕</button>
+    </div>`
+  ).join('');
+}
+
+function addDayBlock(){
+  tempBlocks.push({start:'09:00',end:'17:00',label:'',allowTasks:false});
+  renderBlocksList();
+}
+function removeDayBlock(i){tempBlocks.splice(i,1);renderBlocksList();}
+
 function saveDaySettings(){
-  state.daySettings[state.viewingDate]={slots:[...tempSlots],breaks:[...tempBreaks],stops:[...tempStops]};
+  state.daySettings[state.viewingDate]={slots:[...tempSlots],breaks:[...tempBreaks],stops:[...tempStops],blocks:[...tempBlocks]};
   buildScheduleForDate(state.viewingDate);
   closeModal('day-settings-modal');save();renderTimeline();
   showToast('Day settings saved');
@@ -2661,6 +2716,17 @@ function openBlockEdit(dateStr,taskId,event){
         ${state.tasks.filter(t=>t.id!==task.id&&!t.completed).map(t=>`<option value="${t.id}" ${task.dependsOn===t.id?'selected':''}>${escHtml(t.name)}</option>`).join('')}
       </select>
     </div>
+    ${(()=>{
+      const dayBlocks=(getDaySettings(dateStr).blocks||[]).filter(b=>b.allowTasks);
+      if(!dayBlocks.length) return '';
+      return `<div class="popover-field">
+        <div class="popover-label">Run within block</div>
+        <select class="popover-input" id="pe-allowed-block" style="color-scheme:dark">
+          <option value="">Normal scheduling</option>
+          ${dayBlocks.map(b=>`<option value="${b.start}-${b.end}" ${task.allowedBlock===b.start+'-'+b.end?'selected':''}>${escHtml(b.label||'Blocked period')} (${fmtTime(timeToMins(b.start))}–${fmtTime(timeToMins(b.end))})</option>`).join('')}
+        </select>
+      </div>`;
+    })()}
     <div class="popover-field" id="pe-dep-mode-row" style="display:${task.dependsOn?'block':'none'}">
       <div class="popover-label">Scheduling</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -2768,6 +2834,8 @@ function saveBlockEdit(){
       task.dependsOn=null;task.dependsGlued=null;
     }
   }
+  const blockSel=document.getElementById('pe-allowed-block');
+  if(blockSel) task.allowedBlock=blockSel.value||null;
   _peType=null;_pePriority=null;_peDepMode=null;
   state.schedule={};
   buildScheduleForDate(editingBlock.dateStr);

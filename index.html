@@ -2751,30 +2751,36 @@ function openBlockEdit(dateStr,taskId,event){
 }
 
 function startFromPopover(){
-  const {dateStr,taskId}=editingBlock;
+  const {taskId}=editingBlock;
   if(!taskId)return;
   const nowM=new Date().getHours()*60+new Date().getMinutes();
   const task=state.tasks.find(t=>t.id===taskId);
   if(!task)return;
   const today=todayStr();
-  const targetDate=dateStr||today;
   const dur=task.duration||30;
 
-  // Lock task to now
+  // Always start on today — override whatever date it was scheduled for
   task.fixedTime=true;
   task.fixedStart=minsToTime(nowM);
   task.fixedEnd=minsToTime(nowM+dur);
-  task.dueDate=task.dueDate||today; // ensure it's due today so scheduler picks it up
+  task.dueDate=today; // move due date to today
   task.scheduledDate=today;
   task.blockStatus='in-progress';
   task.updatedAt=Date.now();
 
-  // Update existing block or create one
+  // Remove from any other date's schedule
+  Object.keys(state.schedule).forEach(d=>{
+    if(d!==today && state.schedule[d]){
+      state.schedule[d].blocks=(state.schedule[d].blocks||[]).filter(b=>b.taskId!==taskId);
+    }
+  });
+
+  // Update or create block on today
   if(!state.schedule[today]) state.schedule[today]={blocks:[],overflow:[]};
   const sched=state.schedule[today];
-  let block=sched.blocks.find(b=>b.taskId===taskId);
-  if(block){
-    block.start=nowM; block.end=nowM+dur; block.status='in-progress';
+  const existing=sched.blocks.find(b=>b.taskId===taskId);
+  if(existing){
+    existing.start=nowM; existing.end=nowM+dur; existing.status='in-progress';
   } else {
     sched.blocks.push({taskId, start:nowM, end:nowM+dur, status:'in-progress', taskType:task.taskType||'work', fixed:true});
   }
@@ -2783,7 +2789,7 @@ function startFromPopover(){
   state.schedule={};
   buildScheduleForDate(today);
   saveNow();renderAll();
-  showToast('Task started ✓');
+  showToast('Task started on today ✓');
 }
 
 let _peDepMode=null;

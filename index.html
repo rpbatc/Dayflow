@@ -1824,17 +1824,16 @@ function setDayAsHoliday(){
   const dateStr=state.viewingDate;
   const label=prompt('Label for this day off (e.g. Bank Holiday, Annual Leave)?','Day off') || 'Day off';
 
-  // Remove all work slots — keep only personal
-  const s=getDaySettings(dateStr);
-  const personalSlots=s.slots.filter(sl=>sl.type==='personal');
-  // If no personal slots at all, add a default one
-  if(!personalSlots.length) personalSlots.push({type:'personal',start:'09:00',end:'21:00'});
+  // Replace work slots with a full personal day
+  // Don't just keep the narrow evening personal slot — give the whole day
+  const personalSlots=[{type:'personal', start:'09:00', end:'21:00'}];
 
   // Add a full-day blocked period covering old work hours
   const workSlots=s.slots.filter(sl=>sl.type==='work');
   const workStart=workSlots.length?workSlots[0].start:'09:00';
   const workEnd=workSlots.length?workSlots[workSlots.length-1].end:'17:00';
-  const newBlocks=[{start:workStart,end:workEnd,label,allowTasks:false},...(s.blocks||[])];
+  // Store a note about the holiday in the day settings
+  const newBlocks=[{start:workStart,end:workEnd,label,allowTasks:true},...(s.blocks||[])];
 
   // Save new day settings with no work slots
   state.daySettings[dateStr]={

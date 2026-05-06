@@ -2943,15 +2943,20 @@ function closeBlockPopover(){
 }
 
 function takeBreakPrompt(){
-  closeBlockPopover();
-  const taskId=editingBlock?.taskId||_breakTaskId;
-  const task=state.tasks.find(t=>t.id===taskId);
-  if(!task)return;
-  _breakTaskId=taskId;
+  // Capture taskId BEFORE closing anything (closing clears editingBlock)
+  const taskId = editingBlock?.taskId || selectedBlockTaskId || _breakTaskId;
+  if(!taskId){ showToast('No task selected','amber'); return; }
 
-  // Show a simple inline prompt using a modal
+  const task=state.tasks.find(t=>t.id===taskId);
+  if(!task){ showToast('Task not found','amber'); return; }
+
+  // Close whichever panel is open
+  closeBlockPopover();
+  closeDetailPanel();
+
+  // Now show the prompt
   const mins=prompt(`How many minutes left to finish "${task.name}"?`);
-  if(mins===null)return; // cancelled
+  if(mins===null)return;
   const remaining=parseInt(mins);
   if(isNaN(remaining)||remaining<1){showToast('Enter a valid number of minutes','amber');return;}
   takeBreak(taskId, remaining);
@@ -2981,7 +2986,7 @@ function takeBreak(taskId, remainingMins){
     name: task.name + ' (cont.)',
     priority: task.priority,
     duration: remainingMins,
-    dueDate: task.dueDate,
+    dueDate: dateStr, // due today so it schedules into remaining slots
     taskType: task.taskType,
     project: task.project,
     notes: task.notes,
@@ -2990,7 +2995,7 @@ function takeBreak(taskId, remainingMins){
     completed: false,
     createdAt: new Date().toISOString(),
     updatedAt: Date.now(),
-    parentTaskId: taskId // link back to original
+    parentTaskId: taskId
   };
   state.tasks.unshift(remainder);
 
@@ -2999,8 +3004,7 @@ function takeBreak(taskId, remainingMins){
   task.blockStatus=null;
   task.updatedAt=Date.now();
 
-  // Rebuild schedule — the remainder task will be auto-scheduled into next available slot
-  state.schedule={};
+  // Rebuild schedule preserving the done block — don't wipe schedule first
   buildScheduleForDate(dateStr);
   saveNow();renderAll();
   showToast(`Break taken — ${remainingMins} min remainder rescheduled ✓`);

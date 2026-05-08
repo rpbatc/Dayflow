@@ -968,6 +968,37 @@ async function loadFromDrive() {
   } catch(e) { setDriveStatus('connected'); }
 }
 
+async function silentDriveCheck(){
+  if(!driveAccessToken) return;
+  try {
+    if(!driveFileId) driveFileId=await findDriveFile();
+    if(!driveFileId) return;
+    const meta=await driveRequest('GET',`https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,null);
+    if(!meta) return;
+    const d=typeof meta==='string'?JSON.parse(meta):meta;
+    const localRaw=localStorage.getItem('dayflow_v3');
+    const localTime=localRaw?JSON.parse(localRaw).lastModified||0:0;
+    const driveTime=d.lastModified||0;
+    if(driveTime>localTime){
+      const localData=localRaw?JSON.parse(localRaw):null;
+      const merged={};
+      (d.tasks||[]).forEach(t=>{merged[t.id]=t;});
+      (localData?.tasks||[]).forEach(t=>{
+        if(!merged[t.id]) merged[t.id]=t;
+        else if((t.updatedAt||0)>(merged[t.id].updatedAt||0)) merged[t.id]=t;
+      });
+      state.tasks=Object.values(merged);
+      state.projects=d.projects||state.projects;
+      state.daySettings=d.daySettings||state.daySettings;
+      state.savedLocations=d.savedLocations||state.savedLocations;
+      if(d.apiKey&&!state.apiKey){state.apiKey=d.apiKey;localStorage.setItem('dayflow_apikey',d.apiKey);}
+      saveLocal();
+      buildScheduleForDate(todayStr());
+      renderAll();
+    }
+  } catch(e){}
+}
+
 async function saveToDrive() {
   if (!driveAccessToken) { saveLocal(); return; }
   setDriveStatus('saving');
@@ -1692,11 +1723,15 @@ function blockAction(dateStr,taskId,action){
 
 // ── NOW LINE ───────────────────────────────────────────────────
 let nowTick;
+let _lastRebuildMin = -1;
+let _lastDriveSyncMin = -1;
+
 function startNowTick(){
   clearInterval(nowTick);
   nowTick=setInterval(()=>{
     const today=todayStr();
-    const nowM=new Date().getHours()*60+new Date().getMinutes();
+    const now=new Date();
+    const nowM=now.getHours()*60+now.getMinutes();
 
     // Extend any in-progress blocks to current time — update in-place, no rebuild
     const sched=state.schedule[today];
@@ -1710,6 +1745,20 @@ function startNowTick(){
       });
     }
 
+    // Rebuild today's schedule every 5 minutes to pick up any changes
+    if(nowM!==_lastRebuildMin && nowM%5===0){
+      _lastRebuildMin=nowM;
+      buildScheduleForDate(today);
+      if(state.currentView==='timeline') renderAll();
+    }
+
+    // Re-sync with Drive every 5 minutes if connected — silent background sync
+    if(nowM!==_lastDriveSyncMin && nowM%5===0 && driveAccessToken && !hasInProgress){
+      _lastDriveSyncMin=nowM;
+      // Only pull from Drive — don't push (avoid loop). Just check for new data.
+      silentDriveCheck().catch(()=>{});
+    }
+
     if(state.currentView==='timeline'&&state.viewingDate===today){
       const line=document.getElementById('now-line');if(!line)return;
       const s=getDaySettings(today);
@@ -1717,9 +1766,9 @@ function startNowTick(){
       const startM=allStarts.length?Math.min(...allStarts):0;
       line.style.top=((nowM-startM)*PX_PER_MIN)+'px';
       const lbl=line.querySelector('.now-time-label');if(lbl)lbl.textContent=fmtTime(nowM);
-      if(hasInProgress) renderTimeline(); // re-render visuals only, no rebuild
+      if(hasInProgress) renderTimeline();
     }
-  },30000);
+  }, 30000); // check every 30 seconds
 }
 
 // ── DAY NAV ─────────────────────────────────────────────────────

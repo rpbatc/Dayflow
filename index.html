@@ -2907,7 +2907,7 @@ function startFromPopover(){
   showToast('Task started on today ✓');
 }
 
-let _peDepMode=null;
+let _peType=null,_pePriority=null,_peDepMode=null;
 function pDepMode(mode,btn){
   _peDepMode=mode;
   btn.parentElement.querySelectorAll('.quick-btn').forEach(b=>b.classList.remove('selected'));
@@ -2925,10 +2925,8 @@ function pePriority(val,btn){
 }
 
 function saveBlockEdit(){
-  console.log('saveBlockEdit called, editingBlock:', editingBlock);
   const task=state.tasks.find(t=>t.id===editingBlock.taskId);
-  console.log('task found:', task?.name);
-  if(!task){console.log('NO TASK FOUND - returning');return;}
+  if(!task)return;
   task.updatedAt=Date.now();
   task.name=document.getElementById('pe-name').value.trim()||task.name;
   task.duration=parseInt(document.getElementById('pe-duration').value)||task.duration;

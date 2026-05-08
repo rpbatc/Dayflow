@@ -2925,8 +2925,10 @@ function pePriority(val,btn){
 }
 
 function saveBlockEdit(){
+  console.log('saveBlockEdit called, editingBlock:', editingBlock);
   const task=state.tasks.find(t=>t.id===editingBlock.taskId);
-  if(!task)return;
+  console.log('task found:', task?.name);
+  if(!task){console.log('NO TASK FOUND - returning');return;}
   task.updatedAt=Date.now();
   task.name=document.getElementById('pe-name').value.trim()||task.name;
   task.duration=parseInt(document.getElementById('pe-duration').value)||task.duration;

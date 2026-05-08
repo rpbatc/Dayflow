@@ -2958,9 +2958,11 @@ function saveBlockEdit(){
   const blockSel=document.getElementById('pe-allowed-block');
   if(blockSel) task.allowedBlock=blockSel.value||null;
   _peType=null;_pePriority=null;_peDepMode=null;
+  const rebuildDate=editingBlock.dateStr||task.scheduledDate||task.dueDate||todayStr();
   state.schedule={};
-  buildScheduleForDate(editingBlock.dateStr);
-  saveNow();renderTimeline();renderCounts();
+  buildScheduleForDate(rebuildDate);
+  if(rebuildDate!==todayStr()) buildScheduleForDate(todayStr());
+  saveNow();renderAll();
   closeBlockPopover();
   showToast('Task updated ✓');
 }

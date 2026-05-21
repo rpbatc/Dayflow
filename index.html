@@ -139,6 +139,7 @@ input:checked + .toggle-slider:before { transform: translateX(14px); background:
 .action-btn { width: 26px; height: 26px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: none; color: var(--text3); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; transition: all 0.15s; }
 .action-btn:hover { background: var(--surface3); color: var(--text); }
 .action-btn.del:hover { background: var(--red-soft); color: var(--red); border-color: var(--red); }
+.action-btn.del.confirming { background: var(--red-soft); color: var(--red); border-color: var(--red); }
 .tag { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500; }
 .tag-high { background: var(--red-soft); color: var(--red); }
 .tag-medium { background: var(--amber-soft); color: var(--amber); }
@@ -1994,11 +1995,21 @@ function toggleTask(id){
 }
 
 function deleteTask(id){
-  if(!confirm('Delete this task?'))return;
-  state.tasks=state.tasks.filter(t=>t.id!==id);
-  state.schedule={};
-  buildScheduleForDate(todayStr());
-  saveNow();renderAll();
+  const task=state.tasks.find(t=>t.id===id);
+  if(!task)return;
+  // Use a two-step delete — first click shows confirmation, second click deletes
+  if(task._confirmDelete){
+    state.tasks=state.tasks.filter(t=>t.id!==id);
+    state.schedule={};
+    buildScheduleForDate(todayStr());
+    saveNow();renderAll();
+    showToast('Task deleted');
+  } else {
+    task._confirmDelete=true;
+    setTimeout(()=>{ if(task._confirmDelete){ task._confirmDelete=false; } },3000);
+    renderTaskList();
+    showToast('Click ✕ again to confirm delete','amber');
+  }
 }
 
 // ── TASK PARSING ───────────────────────────────────────────────
@@ -2530,7 +2541,7 @@ function renderTaskList(){
       </div>
       <div class="task-actions">
         <button class="action-btn" onclick="event.stopPropagation();openTaskEdit('${task.id}',event)" title="Edit">✎</button>
-        <button class="action-btn del" onclick="event.stopPropagation();deleteTask('${task.id}')" title="Delete">✕</button>
+        <button class="action-btn del${task._confirmDelete?' confirming':''}" onclick="event.stopPropagation();deleteTask('${task.id}')" title="${task._confirmDelete?'Click to confirm delete':'Delete'}">${task._confirmDelete?'✓?':'✕'}</button>
       </div>
     </div>`;
   }).join('');

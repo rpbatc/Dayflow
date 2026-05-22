@@ -2031,9 +2031,17 @@ Rules: urgent=high, not urgent=low. Extract duration from "20 mins","2 hours" et
     const resp=await fetch("https://api.anthropic.com/v1/messages",{
       method:"POST",
       headers:{"Content-Type":"application/json","x-api-key":state.apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-      body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:350,messages:[{role:"user",content:prompt}]})
+      body:JSON.stringify({model:"claude-haiku-4-5",max_tokens:350,messages:[{role:"user",content:prompt}]})
     });
-    if(!resp.ok){const e=await resp.json();if(resp.status===401){showToast('Invalid API key','red');openApiModal();}else showToast('API error','red');document.getElementById('ai-thinking').className='ai-thinking';return;}
+    if(!resp.ok){
+      let msg='API error';
+      try{const e=await resp.json();msg=e?.error?.message||e?.type||msg;}catch(e){}
+      if(resp.status===401){showToast('Invalid API key — please re-enter','red');openApiModal();}
+      else if(resp.status===429){showToast('API rate limit or credit limit reached','amber');}
+      else if(resp.status===403){showToast('API access denied (403) — check your key','red');}
+      else{showToast(`API error ${resp.status}: ${msg}`,'red');}
+      document.getElementById('ai-thinking').className='ai-thinking';return;
+    }
     const data=await resp.json();
     let text=data.content?.[0]?.text||'{}';
     text=text.replace(/```json|```/g,'').trim();
@@ -2407,7 +2415,7 @@ Return null for any journey not specified.`;
     const resp=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':state.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:200,messages:[{role:'user',content:prompt}]})
+      body:JSON.stringify({model:'claude-haiku-4-5',max_tokens:200,messages:[{role:'user',content:prompt}]})
     });
     if(!resp.ok){showToast('API error calculating travel','red');return;}
     const data=await resp.json();
@@ -2643,7 +2651,7 @@ Rules: Extract ONLY clear action items, not background context. urgent=high. Inf
     const resp=await fetch("https://api.anthropic.com/v1/messages",{
       method:"POST",
       headers:{"Content-Type":"application/json","x-api-key":state.apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-      body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:1500,messages:[{role:"user",content:prompt}]})
+      body:JSON.stringify({model:"claude-haiku-4-5",max_tokens:1500,messages:[{role:"user",content:prompt}]})
     });
     if(!resp.ok){showToast('API error','red');return;}
     const data=await resp.json();

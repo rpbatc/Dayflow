@@ -851,6 +851,8 @@ let state = {
 let tempSlots=[], tempBreaks=[], tempStops=[], tempBlocks=[];
 
 // ── GOOGLE DRIVE SYNC ─────────────────────────────────────────
+// Drive is PRIMARY. localStorage is a read-through cache only.
+// On startup: Drive loads first. On every change: Drive saves immediately.
 const GOOG_CLIENT_ID = '520774618906-jbupm1s9jartsvflf52o44ungekm3636.apps.googleusercontent.com';
 const GOOG_SCOPES = 'https://www.googleapis.com/auth/drive.appdata';
 const DRIVE_FILE_NAME = 'dayflow_data.json';
@@ -858,6 +860,7 @@ const DRIVE_FILE_NAME = 'dayflow_data.json';
 let driveAccessToken = null;
 let driveFileId = null;
 let saveTimer = null;
+let _driveSaving = false;
 
 function setDriveStatus(status) {
   const dot = document.getElementById('status-dot');
@@ -918,90 +921,104 @@ async function loadFromDrive() {
   if (!driveAccessToken) return;
   try {
     driveFileId = await findDriveFile();
-    if (!driveFileId) { setDriveStatus('connected'); return; }
-    const meta = await driveRequest('GET', `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`, null);
-    if (!meta) return;
-    const d = typeof meta === 'string' ? JSON.parse(meta) : meta;
-
-    // Only overwrite local data if Drive data is strictly newer
-    const localRaw = localStorage.getItem('dayflow_v3');
-    const localData = localRaw ? JSON.parse(localRaw) : null;
-    const localTime = localData?.lastModified || 0;
-    const driveTime = d.lastModified || 0;
-
-    if (driveTime >= localTime) {
-      // Drive is newer — but merge tasks intelligently rather than wholesale replace
-      // Keep any local tasks that are newer than the Drive snapshot
-      const driveTasks = d.tasks || [];
-      const localTasks = localData?.tasks || [];
-      // Build a merged set: for each task, keep the version with the higher updatedAt
-      const merged = {};
-      driveTasks.forEach(t => { merged[t.id] = t; });
-      localTasks.forEach(t => {
-        if (!merged[t.id]) {
-          // Task exists locally but not in Drive — keep it (was added offline)
-          merged[t.id] = t;
-        } else {
-          // Both have it — keep whichever was updated more recently
-          const driveUpdated = merged[t.id].updatedAt || 0;
-          const localUpdated = t.updatedAt || 0;
-          if (localUpdated > driveUpdated) merged[t.id] = t;
-        }
-      });
-      state.tasks = Object.values(merged);
-      state.projects = d.projects || localData?.projects || [];
-      state.daySettings = d.daySettings || localData?.daySettings || {};
-      state.savedLocations = d.savedLocations || localData?.savedLocations || [];
-      state.schedule = {};
-      if (d.notes) setTimeout(() => { const el = document.getElementById('notes-textarea'); if (el) el.value = d.notes; }, 0);
-    } else {
-      // Local is newer — push local up to Drive instead
-      showToast('Local data is newer — pushing to Drive');
-      await saveToDrive();
+    if (!driveFileId) {
+      // No Drive file yet — if we have local data, push it up now
+      const localRaw = localStorage.getItem('dayflow_v3');
+      if (localRaw) {
+        try {
+          const d = JSON.parse(localRaw);
+          if (d.tasks && d.tasks.length > 0) {
+            state.tasks = d.tasks;
+            state.projects = d.projects || [];
+            state.daySettings = d.daySettings || {};
+            state.savedLocations = d.savedLocations || [];
+            await saveToDrive();
+            showToast('Data backed up to Drive ✓');
+          }
+        } catch(e) {}
+      }
+      setDriveStatus('connected');
       return;
     }
 
-    if (d.apiKey) { state.apiKey = d.apiKey; localStorage.setItem('dayflow_apikey', d.apiKey); }
+    const raw = await driveRequest('GET', `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`, null);
+    if (!raw) return;
+    const d = typeof raw === 'string' ? JSON.parse(raw) : raw;
+
+    // Merge Drive data with any local data — per-task, most recently updated wins
+    const localRaw = localStorage.getItem('dayflow_v3');
+    const localData = localRaw ? JSON.parse(localRaw) : null;
+    const merged = {};
+    (d.tasks || []).forEach(t => { merged[t.id] = t; });
+    (localData?.tasks || []).forEach(t => {
+      if (!merged[t.id]) {
+        merged[t.id] = t; // local-only task — keep it
+      } else {
+        // Keep whichever version was updated more recently
+        if ((t.updatedAt || 0) > (merged[t.id].updatedAt || 0)) merged[t.id] = t;
+      }
+    });
+
+    state.tasks = Object.values(merged);
+    state.projects = d.projects || localData?.projects || [];
+    state.daySettings = d.daySettings || localData?.daySettings || {};
+    state.savedLocations = d.savedLocations || localData?.savedLocations || [];
+    state.schedule = {};
+
+    if (d.apiKey) {
+      state.apiKey = d.apiKey;
+      localStorage.setItem('dayflow_apikey', d.apiKey);
+      document.getElementById('api-banner').style.display = 'none';
+    }
+    if (d.notes) setTimeout(() => { const el = document.getElementById('notes-textarea'); if (el) el.value = d.notes; }, 0);
+
+    // Always push merged result back to Drive to keep it current
     saveLocal();
+    await saveToDrive();
     setDriveStatus('connected');
     buildScheduleForDate(todayStr());
     renderAll();
-  } catch(e) { setDriveStatus('connected'); }
+  } catch(e) {
+    console.error('Drive load error:', e);
+    setDriveStatus('local');
+  }
 }
 
-async function silentDriveCheck(){
-  if(!driveAccessToken) return;
+async function silentDriveCheck() {
+  if (!driveAccessToken || _driveSaving) return;
   try {
-    if(!driveFileId) driveFileId=await findDriveFile();
-    if(!driveFileId) return;
-    const meta=await driveRequest('GET',`https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,null);
-    if(!meta) return;
-    const d=typeof meta==='string'?JSON.parse(meta):meta;
-    const localRaw=localStorage.getItem('dayflow_v3');
-    const localTime=localRaw?JSON.parse(localRaw).lastModified||0:0;
-    const driveTime=d.lastModified||0;
-    if(driveTime>localTime){
-      const localData=localRaw?JSON.parse(localRaw):null;
-      const merged={};
-      (d.tasks||[]).forEach(t=>{merged[t.id]=t;});
-      (localData?.tasks||[]).forEach(t=>{
-        if(!merged[t.id]) merged[t.id]=t;
-        else if((t.updatedAt||0)>(merged[t.id].updatedAt||0)) merged[t.id]=t;
+    if (!driveFileId) driveFileId = await findDriveFile();
+    if (!driveFileId) return;
+    const raw = await driveRequest('GET', `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`, null);
+    if (!raw) return;
+    const d = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const localRaw = localStorage.getItem('dayflow_v3');
+    const localTime = localRaw ? (JSON.parse(localRaw).lastModified || 0) : 0;
+    const driveTime = d.lastModified || 0;
+    if (driveTime > localTime) {
+      // Drive is newer — merge and update
+      const merged = {};
+      (d.tasks || []).forEach(t => { merged[t.id] = t; });
+      state.tasks.forEach(t => {
+        if (!merged[t.id]) merged[t.id] = t;
+        else if ((t.updatedAt || 0) > (merged[t.id].updatedAt || 0)) merged[t.id] = t;
       });
-      state.tasks=Object.values(merged);
-      state.projects=d.projects||state.projects;
-      state.daySettings=d.daySettings||state.daySettings;
-      state.savedLocations=d.savedLocations||state.savedLocations;
-      if(d.apiKey&&!state.apiKey){state.apiKey=d.apiKey;localStorage.setItem('dayflow_apikey',d.apiKey);}
+      state.tasks = Object.values(merged);
+      state.projects = d.projects || state.projects;
+      state.daySettings = d.daySettings || state.daySettings;
+      state.savedLocations = d.savedLocations || state.savedLocations;
+      if (d.apiKey && !state.apiKey) { state.apiKey = d.apiKey; localStorage.setItem('dayflow_apikey', d.apiKey); }
       saveLocal();
       buildScheduleForDate(todayStr());
       renderAll();
     }
-  } catch(e){}
+  } catch(e) {}
 }
 
 async function saveToDrive() {
   if (!driveAccessToken) { saveLocal(); return; }
+  if (_driveSaving) { saveLocal(); return; } // prevent concurrent saves
+  _driveSaving = true;
   setDriveStatus('saving');
   const payload = JSON.stringify({
     tasks: state.tasks,
@@ -1014,13 +1031,12 @@ async function saveToDrive() {
   });
   try {
     if (!driveFileId) driveFileId = await findDriveFile();
+    const form = new FormData();
     if (driveFileId) {
-      const form = new FormData();
       form.append('metadata', new Blob([JSON.stringify({name: DRIVE_FILE_NAME})], {type:'application/json'}));
       form.append('file', new Blob([payload], {type:'application/json'}));
       await driveRequest('PATCH', `https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=multipart`, form);
     } else {
-      const form = new FormData();
       form.append('metadata', new Blob([JSON.stringify({name: DRIVE_FILE_NAME, parents:['appDataFolder']})], {type:'application/json'}));
       form.append('file', new Blob([payload], {type:'application/json'}));
       const res = await driveRequest('POST', 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', form);
@@ -1028,29 +1044,33 @@ async function saveToDrive() {
     }
     saveLocal();
     setDriveStatus('connected');
-  } catch(e) { saveLocal(); setDriveStatus('local'); }
+  } catch(e) {
+    saveLocal();
+    setDriveStatus('local');
+  } finally {
+    _driveSaving = false;
+  }
 }
 
 function saveLocal() {
-  localStorage.setItem('dayflow_v3', JSON.stringify({
-    tasks: state.tasks,
-    projects: state.projects,
-    daySettings: state.daySettings,
-    savedLocations: state.savedLocations,
-    notes: document.getElementById('notes-textarea')?.value || '',
-    lastModified: Date.now()
-  }));
+  try {
+    localStorage.setItem('dayflow_v3', JSON.stringify({
+      tasks: state.tasks,
+      projects: state.projects,
+      daySettings: state.daySettings,
+      savedLocations: state.savedLocations,
+      notes: document.getElementById('notes-textarea')?.value || '',
+      lastModified: Date.now()
+    }));
+  } catch(e) {} // storage full etc — fail silently
 }
 
 function save() {
-  // Always save locally immediately — this is the source of truth
   saveLocal();
-  // Debounce Drive saves to avoid hammering the API
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => saveToDrive(), 2000);
+  saveTimer = setTimeout(() => saveToDrive(), 1500);
 }
 
-// Use this for critical actions — saves immediately to both local and Drive
 function saveNow() {
   saveLocal();
   clearTimeout(saveTimer);
@@ -1060,7 +1080,8 @@ function saveNow() {
 // ── INIT ──────────────────────────────────────────────────────
 function init() {
   state.viewingDate = todayStr();
-  // Load from localStorage first for instant startup
+
+  // 1. Try localStorage first for instant startup (shows something immediately)
   const saved = localStorage.getItem('dayflow_v3');
   if (saved) {
     try {
@@ -1073,6 +1094,7 @@ function init() {
       if (d.notes) setTimeout(() => { const el = document.getElementById('notes-textarea'); if (el) el.value = d.notes; }, 0);
     } catch(e) {}
   }
+
   state.apiKey = localStorage.getItem('dayflow_apikey') || null;
   if (!state.apiKey) document.getElementById('api-banner').style.display = 'flex';
 
@@ -1105,7 +1127,6 @@ function init() {
     function startDrag(cx,cy){
       dragging=true;
       const r=popover.getBoundingClientRect();
-      // Switch from flex-centred to absolute positioning
       popover.style.position='fixed';
       popover.style.left=r.left+'px';
       popover.style.top=r.top+'px';
@@ -1137,7 +1158,7 @@ function init() {
   renderAll();
   startNowTick();
 
-  // Try to reconnect Drive automatically using stored token
+  // 2. Try Drive — will merge with local data and update display if Drive has more
   setDriveStatus('local');
   document.getElementById('drive-connect-btn').style.display = 'block';
   const storedToken = localStorage.getItem('dayflow_drive_token');

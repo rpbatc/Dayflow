@@ -2658,7 +2658,7 @@ async function extractTasksFromNotes(){
   document.getElementById('extract-btn').disabled=true;
 
   const pnames=state.projects.map(p=>p.name).join(', ')||'none';
-  const prompt=`You are a task extractor for a productivity app. Extract every action item or task from these notes.
+  const prompt=`You are a task extractor for a productivity app. Extract every action item or thing that needs doing from these notes.
 Available projects: ${pnames}. Today: ${todayStr()}.
 Notes:
 """
@@ -2666,7 +2666,12 @@ ${notes}
 """
 Respond ONLY with a JSON array (no markdown). Each item:
 {"name":"clear action-oriented task name","priority":"high"|"medium"|"low"|null,"duration":minutes_or_null,"dueDate":"YYYY-MM-DD"|null,"project":"exact name or null","notes":"extra context or null","taskType":"work"|"personal"}
-Rules: Extract ONLY clear action items, not background context. urgent=high. Infer taskType: personal errands/home/family=personal, else work. Compute real dates from relative phrases. Return [] if no tasks found.`;
+Rules:
+- Be generous — if something implies an action, include it. E.g. "out of office" → "Set out of office", "flights" → "Book flights", "dentist" → "Book dentist appointment".
+- Convert noun phrases into verb-led tasks: "out of office" → "Set out of office reply", "report" → "Write report".
+- urgent=high priority. Infer taskType: personal errands/home/family=personal, else work.
+- Compute real dates from relative phrases (today=${todayStr()}).
+- Return [] only if there is genuinely nothing actionable at all.`;
 
   try{
     const resp=await fetch("https://api.anthropic.com/v1/messages",{

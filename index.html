@@ -1284,11 +1284,7 @@ function placeTaskInSlots(task, slots, blocks, overflow, dateStr, allBlocks) {
   const travelAfter = task.travelAfterMins || 0;
   const totalDur = dur + travelBefore + travelAfter;
 
-  // If task has a "later" time set for today, find first slot that starts after it
-  let notBefore = 0;
-  if (task.notBeforeDate === dateStr && task.notBeforeTime) {
-    notBefore = task.notBeforeTime;
-  }
+  // If task is assigned to run within a blocked period, schedule it there instead
   if (task.allowedBlock) {
     const [bStart, bEnd] = task.allowedBlock.split('-').map(Number);
     if (!isNaN(bStart) && !isNaN(bEnd) && bEnd - bStart >= dur) {
@@ -1335,23 +1331,20 @@ function placeTaskInSlots(task, slots, blocks, overflow, dateStr, allBlocks) {
     }
   }
 
-  // Filter slots: must match type, and if notBefore is set, slot must end after notBefore
-  const matching = slots.filter(s => s.type === taskType && s.end > notBefore);
+  const matching = slots.filter(s => s.type === taskType);
   let placed = false;
   for (const slot of matching) {
-    // If notBefore is set and the cursor hasn't reached it yet, advance cursor for this task only
-    const effectiveCursor = Math.max(slot.cursor, notBefore);
-    const avail = slot.end - effectiveCursor;
+    const avail = slot.end - slot.cursor;
     if (avail >= totalDur) {
       if (travelBefore > 0) {
-        blocks.push({taskId:task.id+'_travel_before', start:effectiveCursor, end:effectiveCursor+travelBefore, status:'travel', taskType, travelBlock:true, label:'Travel to '+task.name});
+        blocks.push({taskId:task.id+'_travel_before', start:slot.cursor, end:slot.cursor+travelBefore, status:'travel', taskType, travelBlock:true, label:'Travel to '+task.name});
       }
-      blocks.push({taskId:task.id, start:effectiveCursor+travelBefore, end:effectiveCursor+travelBefore+dur, status:'scheduled', taskType, dependsOn:task.dependsOn||null, glued:task.dependsGlued||false});
+      blocks.push({taskId:task.id, start:slot.cursor+travelBefore, end:slot.cursor+travelBefore+dur, status:'scheduled', taskType, dependsOn:task.dependsOn||null, glued:task.dependsGlued||false});
       if (travelAfter > 0) {
-        blocks.push({taskId:task.id+'_travel_after', start:effectiveCursor+travelBefore+dur, end:effectiveCursor+totalDur, status:'travel', taskType, travelBlock:true, label:'Travel from '+task.name});
+        blocks.push({taskId:task.id+'_travel_after', start:slot.cursor+travelBefore+dur, end:slot.cursor+totalDur, status:'travel', taskType, travelBlock:true, label:'Travel from '+task.name});
       }
       task.scheduledDate = dateStr;
-      slot.cursor = effectiveCursor + totalDur;
+      slot.cursor += totalDur;
       placed = true;
       break;
     } else if (task.chunkable && task.chunkMin && avail >= task.chunkMin + travelBefore) {
@@ -2564,7 +2557,6 @@ function renderTaskList(){
     const schedTag=task.scheduledDate&&task.scheduledDate!==task.dueDate&&task.scheduledDate>=todayStr()
       ?`<span class="tag tag-scheduled">Sched ${dateLabel(task.scheduledDate)}</span>`:'';
     const travelTag=(task.travelBefore||task.travelAfterMins)?'<span class="tag" style="background:var(--amber-soft);color:var(--amber)">🚗 travel</span>':'';
-    const laterTag=(task.notBeforeTime&&task.notBeforeDate===todayStr())?`<span class="tag" style="background:var(--surface3);color:var(--text3);cursor:pointer" onclick="event.stopPropagation();clearLater('${task.id}');renderAll()" title="Click to clear">⏱ after ${fmtTime(task.notBeforeTime)} ✕</span>`:'';
     const notesLine=task.notes?`<div class="task-notes">${escHtml(task.notes)}</div>`:'';
     return`<div class="task-card ${task.completed?'completed':''}" onclick="openTaskEdit('${task.id}',event)">
       <div class="task-type-bar ${taskType}"></div>
@@ -2573,7 +2565,7 @@ function renderTaskList(){
         <div class="task-name">${escHtml(task.name)}</div>${notesLine}
         <div class="task-meta">
           <span class="tag tag-${taskType}">${taskType}</span>
-          ${prioTag}${projTag}${durTag}${travelTag}${laterTag}${dateTag}${schedTag}
+          ${prioTag}${projTag}${durTag}${travelTag}${dateTag}${schedTag}
         </div>
       </div>
       <div class="task-actions">
@@ -3146,11 +3138,10 @@ function showDetailPanel(dateStr, taskId){
       </div>`;
   } else {
     statusEl.innerHTML=`
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <div style="display:flex;gap:6px">
         <button class="btn btn-ghost btn-sm" style="flex:1;color:var(--accent);border-color:var(--accent)" onclick="startFromDetail('${dateStr}','${taskId}')">▶ Start</button>
         <button class="btn btn-ghost btn-sm" style="flex:1;color:var(--green);border-color:var(--green)" onclick="completeFromDetail('${dateStr}','${taskId}')">✓ Done</button>
-      </div>
-      <button class="btn btn-ghost btn-sm" style="width:100%;color:var(--text3);margin-top:4px;font-size:11px" onclick="laterTask('${taskId}')">⏱ Later — do in ~2hrs</button>`;
+      </div>`;
   }
 
   // Meta info
@@ -3175,39 +3166,12 @@ function showDetailPanel(dateStr, taskId){
   editingBlock = {dateStr, taskId};
 }
 
-function laterTask(taskId){
-  const task=state.tasks.find(t=>t.id===taskId);
-  if(!task)return;
-  const nowM=new Date().getHours()*60+new Date().getMinutes();
-  const laterM=nowM+120; // 2 hours from now
-
-  // Set a start date/time floor — don't schedule before this time today
-  task.notBeforeTime=laterM; // minutes from midnight
-  task.notBeforeDate=todayStr();
-  task.scheduledDate=null; // clear any existing slot
-  task.updatedAt=Date.now();
-
-  closeDetailPanel();
-  state.schedule={};
-  buildScheduleForDate(todayStr());
-  saveNow();renderAll();
-  showToast(`"${task.name}" pushed to after ${fmtTime(laterM)} ✓`);
-}
-
-function clearLater(taskId){
-  const task=state.tasks.find(t=>t.id===taskId);
-  if(!task)return;
-  task.notBeforeTime=null;
-  task.notBeforeDate=null;
-  task.updatedAt=Date.now();
-}
-
 function closeDetailPanel(){
   selectedBlockTaskId = null;
   document.getElementById('task-detail-panel').style.display='none';
   document.getElementById('default-panel').style.display='flex';
   editingBlock = {dateStr:null, taskId:null};
-  renderTimeline();
+  renderTimeline(); // re-render to deselect block highlight
 }
 
 function openEditFromDetail(){

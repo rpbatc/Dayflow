@@ -458,7 +458,7 @@ input:checked + .toggle-slider:before { transform: translateX(14px); background:
   <div class="sidebar-footer">
     <div class="status-dot" id="status-dot"></div>
     <span id="status-label">Not connected</span>
-    <button class="drive-connect-btn" id="drive-connect-btn" onclick="connectDrive()" style="display:none">Connect Drive</button>
+    <button class="drive-connect-btn" id="drive-connect-btn" onclick="connectDrive()">Connect Drive</button>
     <button class="drive-connect-btn" onclick="openLocationsModal()" style="margin-left:auto">📍 Places</button>
   </div>
 </div>
@@ -1077,11 +1077,12 @@ function saveNow() {
   saveToDrive();
 }
 
-// ── INIT ──────────────────────────────────────────────────────
+// ── SEED DATA — pre-loaded tasks restored from backup ──────────
+const SEED_TASKS = [{"id":"1783583754718","name":"Record screen grab about occasional/dining furniture for ercol/site","priority":"medium","duration":30,"dueDate":"2026-07-09","startDate":null,"fixedTime":false,"fixedStart":null,"fixedEnd":null,"project":null,"notes":"ercol website - occasional and dining furniture content","taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-09T07:55:54.718Z","scheduledDate":"2026-07-09"},{"id":"17835246565470.3379547022015482","name":"Create short document about 3rd party brand stories","priority":"low","duration":45,"dueDate":"2026-07-24","project":null,"notes":"Make a short about 3rd party brand stories","taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T15:30:56.547Z","scheduledDate":"2026-07-09"},{"id":"17835246565470.24009444740892905","name":"Research best practices for tracking health and safety for people over one week","priority":"medium","duration":45,"dueDate":"2026-07-24","project":null,"notes":"How best people track H&S for people more than a week","taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T15:30:56.547Z","scheduledDate":"2026-07-09"},{"id":"17835246565470.4187766098248733","name":"Email Steve and Jonny about AC availability","priority":"low","duration":5,"dueDate":"2026-07-09","project":null,"notes":"Ask if 2 AC units are available and if they can set up for us","taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T15:30:56.547Z","scheduledDate":"2026-07-09"},{"id":"1783497685118","name":"Get Simon and Olivia upgraded on Comfort Coach and show them reporting","priority":"low","duration":30,"dueDate":null,"startDate":null,"fixedTime":false,"fixedStart":null,"fixedEnd":null,"project":null,"notes":null,"taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T08:01:25.118Z","updatedAt":1783497701935,"dependsOn":"1783497626944","dependsGlued":true},{"id":"1783497626944","name":"Figure out reporting for Simon and Olivia","priority":"low","duration":15,"dueDate":"2026-07-31","startDate":null,"fixedTime":false,"fixedStart":null,"fixedEnd":null,"project":null,"notes":null,"taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T08:00:26.944Z"},{"id":"17834144828810.6867609582175348","name":"Tidy Academy area","priority":"medium","duration":30,"dueDate":"2026-07-09","project":null,"notes":null,"taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-07T08:54:42.881Z","updatedAt":1783502194551,"startDate":"2026-07-09","fixedTime":true,"fixedStart":"11:00","fixedEnd":"11:30"},{"id":"17834138175790.17559510579330595","name":"Chat with Jack about GDPR thing","priority":"low","duration":5,"dueDate":"2026-07-10","project":null,"notes":null,"taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-07T08:43:37.579Z"},{"id":"17834138175780.1899185596050722","name":"Reformat Warrington doc for Jack","priority":"low","duration":30,"dueDate":"2026-07-24","project":null,"notes":"See email for details","taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-07T08:43:37.578Z"},{"id":"17835098231370.8018031951834966","name":"Create short doc about 3rd party brand stories","priority":"medium","duration":30,"dueDate":"2026-07-16","project":null,"notes":"Make a short featuring 3rd party brand stories","taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T11:23:43.137Z"},{"id":"17835098231370.29679954788950524","name":"Research best practices for tracking health and safety for people longer than one week","priority":"low","duration":60,"dueDate":"2026-07-24","project":null,"notes":"Find how best people track H&S for extended periods","taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T11:23:43.137Z"},{"id":"17835098231370.17257514463072998","name":"Email Steve and Jonny about AC availability","priority":"low","duration":30,"dueDate":"2026-07-10","project":null,"notes":"Ask if 2 AC units are available and if they could set up for us","taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T11:23:43.137Z"},{"id":"17835245849800.7826926011673452","name":"Upload Tunbridge video to Share","priority":"low","duration":15,"dueDate":"2026-07-09","project":null,"notes":null,"taskType":"work","chunkable":false,"chunkMin":null,"completed":false,"createdAt":"2026-07-08T15:29:44.980Z"}];
 function init() {
   state.viewingDate = todayStr();
 
-  // 1. Try localStorage first for instant startup (shows something immediately)
+  // 1. Try localStorage first for instant startup
   const saved = localStorage.getItem('dayflow_v3');
   if (saved) {
     try {
@@ -1093,6 +1094,13 @@ function init() {
       state.schedule = {};
       if (d.notes) setTimeout(() => { const el = document.getElementById('notes-textarea'); if (el) el.value = d.notes; }, 0);
     } catch(e) {}
+  } else {
+    // No localStorage — restore from seed data
+    state.tasks = SEED_TASKS.map(t=>({...t}));
+    state.projects = [];
+    state.schedule = {};
+    saveLocal(); // write to localStorage immediately
+    showToast('Tasks restored from backup ✓');
   }
 
   state.apiKey = localStorage.getItem('dayflow_apikey') || null;
@@ -1284,7 +1292,11 @@ function placeTaskInSlots(task, slots, blocks, overflow, dateStr, allBlocks) {
   const travelAfter = task.travelAfterMins || 0;
   const totalDur = dur + travelBefore + travelAfter;
 
-  // If task is assigned to run within a blocked period, schedule it there instead
+  // If task has a "later" time set for today, find first slot that starts after it
+  let notBefore = 0;
+  if (task.notBeforeDate === dateStr && task.notBeforeTime) {
+    notBefore = task.notBeforeTime;
+  }
   if (task.allowedBlock) {
     const [bStart, bEnd] = task.allowedBlock.split('-').map(Number);
     if (!isNaN(bStart) && !isNaN(bEnd) && bEnd - bStart >= dur) {
@@ -1331,20 +1343,23 @@ function placeTaskInSlots(task, slots, blocks, overflow, dateStr, allBlocks) {
     }
   }
 
-  const matching = slots.filter(s => s.type === taskType);
+  // Filter slots: must match type, and if notBefore is set, slot must end after notBefore
+  const matching = slots.filter(s => s.type === taskType && s.end > notBefore);
   let placed = false;
   for (const slot of matching) {
-    const avail = slot.end - slot.cursor;
+    // If notBefore is set and the cursor hasn't reached it yet, advance cursor for this task only
+    const effectiveCursor = Math.max(slot.cursor, notBefore);
+    const avail = slot.end - effectiveCursor;
     if (avail >= totalDur) {
       if (travelBefore > 0) {
-        blocks.push({taskId:task.id+'_travel_before', start:slot.cursor, end:slot.cursor+travelBefore, status:'travel', taskType, travelBlock:true, label:'Travel to '+task.name});
+        blocks.push({taskId:task.id+'_travel_before', start:effectiveCursor, end:effectiveCursor+travelBefore, status:'travel', taskType, travelBlock:true, label:'Travel to '+task.name});
       }
-      blocks.push({taskId:task.id, start:slot.cursor+travelBefore, end:slot.cursor+travelBefore+dur, status:'scheduled', taskType, dependsOn:task.dependsOn||null, glued:task.dependsGlued||false});
+      blocks.push({taskId:task.id, start:effectiveCursor+travelBefore, end:effectiveCursor+travelBefore+dur, status:'scheduled', taskType, dependsOn:task.dependsOn||null, glued:task.dependsGlued||false});
       if (travelAfter > 0) {
-        blocks.push({taskId:task.id+'_travel_after', start:slot.cursor+travelBefore+dur, end:slot.cursor+totalDur, status:'travel', taskType, travelBlock:true, label:'Travel from '+task.name});
+        blocks.push({taskId:task.id+'_travel_after', start:effectiveCursor+travelBefore+dur, end:effectiveCursor+totalDur, status:'travel', taskType, travelBlock:true, label:'Travel from '+task.name});
       }
       task.scheduledDate = dateStr;
-      slot.cursor += totalDur;
+      slot.cursor = effectiveCursor + totalDur;
       placed = true;
       break;
     } else if (task.chunkable && task.chunkMin && avail >= task.chunkMin + travelBefore) {
@@ -2557,6 +2572,7 @@ function renderTaskList(){
     const schedTag=task.scheduledDate&&task.scheduledDate!==task.dueDate&&task.scheduledDate>=todayStr()
       ?`<span class="tag tag-scheduled">Sched ${dateLabel(task.scheduledDate)}</span>`:'';
     const travelTag=(task.travelBefore||task.travelAfterMins)?'<span class="tag" style="background:var(--amber-soft);color:var(--amber)">🚗 travel</span>':'';
+    const laterTag=(task.notBeforeTime&&task.notBeforeDate===todayStr())?`<span class="tag" style="background:var(--surface3);color:var(--text3);cursor:pointer" onclick="event.stopPropagation();clearLater('${task.id}');renderAll()" title="Click to clear">⏱ after ${fmtTime(task.notBeforeTime)} ✕</span>`:'';
     const notesLine=task.notes?`<div class="task-notes">${escHtml(task.notes)}</div>`:'';
     return`<div class="task-card ${task.completed?'completed':''}" onclick="openTaskEdit('${task.id}',event)">
       <div class="task-type-bar ${taskType}"></div>
@@ -2565,7 +2581,7 @@ function renderTaskList(){
         <div class="task-name">${escHtml(task.name)}</div>${notesLine}
         <div class="task-meta">
           <span class="tag tag-${taskType}">${taskType}</span>
-          ${prioTag}${projTag}${durTag}${travelTag}${dateTag}${schedTag}
+          ${prioTag}${projTag}${durTag}${travelTag}${laterTag}${dateTag}${schedTag}
         </div>
       </div>
       <div class="task-actions">
@@ -3138,10 +3154,11 @@ function showDetailPanel(dateStr, taskId){
       </div>`;
   } else {
     statusEl.innerHTML=`
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-ghost btn-sm" style="flex:1;color:var(--accent);border-color:var(--accent)" onclick="startFromDetail('${dateStr}','${taskId}')">▶ Start</button>
         <button class="btn btn-ghost btn-sm" style="flex:1;color:var(--green);border-color:var(--green)" onclick="completeFromDetail('${dateStr}','${taskId}')">✓ Done</button>
-      </div>`;
+      </div>
+      <button class="btn btn-ghost btn-sm" style="width:100%;color:var(--text3);margin-top:4px;font-size:11px" onclick="laterTask('${taskId}')">⏱ Later — do in ~2hrs</button>`;
   }
 
   // Meta info
@@ -3166,12 +3183,39 @@ function showDetailPanel(dateStr, taskId){
   editingBlock = {dateStr, taskId};
 }
 
+function laterTask(taskId){
+  const task=state.tasks.find(t=>t.id===taskId);
+  if(!task)return;
+  const nowM=new Date().getHours()*60+new Date().getMinutes();
+  const laterM=nowM+120; // 2 hours from now
+
+  // Set a start date/time floor — don't schedule before this time today
+  task.notBeforeTime=laterM; // minutes from midnight
+  task.notBeforeDate=todayStr();
+  task.scheduledDate=null; // clear any existing slot
+  task.updatedAt=Date.now();
+
+  closeDetailPanel();
+  state.schedule={};
+  buildScheduleForDate(todayStr());
+  saveNow();renderAll();
+  showToast(`"${task.name}" pushed to after ${fmtTime(laterM)} ✓`);
+}
+
+function clearLater(taskId){
+  const task=state.tasks.find(t=>t.id===taskId);
+  if(!task)return;
+  task.notBeforeTime=null;
+  task.notBeforeDate=null;
+  task.updatedAt=Date.now();
+}
+
 function closeDetailPanel(){
   selectedBlockTaskId = null;
   document.getElementById('task-detail-panel').style.display='none';
   document.getElementById('default-panel').style.display='flex';
   editingBlock = {dateStr:null, taskId:null};
-  renderTimeline(); // re-render to deselect block highlight
+  renderTimeline();
 }
 
 function openEditFromDetail(){

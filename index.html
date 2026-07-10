@@ -1292,11 +1292,14 @@ function placeTaskInSlots(task, slots, blocks, overflow, dateStr, allBlocks) {
   const travelAfter = task.travelAfterMins || 0;
   const totalDur = dur + travelBefore + travelAfter;
 
-  // If task has a "later" time set for today, find first slot that starts after it
+  // notBefore: the earliest time this task can be scheduled (from "later" or dependency)
   let notBefore = 0;
+
+  // "Later" feature: don't schedule before notBeforeTime today
   if (task.notBeforeDate === dateStr && task.notBeforeTime) {
-    notBefore = task.notBeforeTime;
+    notBefore = Math.max(notBefore, task.notBeforeTime);
   }
+
   if (task.allowedBlock) {
     const [bStart, bEnd] = task.allowedBlock.split('-').map(Number);
     if (!isNaN(bStart) && !isNaN(bEnd) && bEnd - bStart >= dur) {
@@ -1307,7 +1310,6 @@ function placeTaskInSlots(task, slots, blocks, overflow, dateStr, allBlocks) {
   }
 
   // Dependency: find parent block's end time
-  let notBefore = 0;
   if (task.dependsOn) {
     // Check auto blocks placed so far, fixed blocks, and done blocks
     const parentBlock = (allBlocks||[]).find(b => b.taskId === task.dependsOn)
